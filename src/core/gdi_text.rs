@@ -11,7 +11,7 @@ use windows::{
         CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject,
         SelectObject, SetBkMode, SetTextColor, TextOutW,
         BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
-        DEFAULT_PITCH, DIB_RGB_COLORS, FF_DONTCARE, NONANTIALIASED_QUALITY,
+        DEFAULT_PITCH, FIXED_PITCH, DIB_RGB_COLORS, FF_DONTCARE, FF_MODERN, NONANTIALIASED_QUALITY,
         OUT_TT_PRECIS, TRANSPARENT, FW_NORMAL, DEFAULT_QUALITY,
         CreateSolidBrush, FillRect,
         GetTextMetricsW, TEXTMETRICW,
@@ -304,78 +304,88 @@ fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// 指定フォント名が GDI に存在するか確認し、存在すればそのまま、なければ "ＭＳ ゴシック" を返す。
-/// CreateFontW → GetTextFaceW で実際に使われたフォント名を確認し、
-/// GDI のデフォルトフォールバック先（System / MS Sans Serif / Arial 等）と一致する場合は
-/// フォントが見つからなかったと判断する。
+/// フォント名でHFONTを作成する。
+/// CreateFontW 後に GetTextFaceW で実際のフォント名を確認し、
+/// 要求したフォントと異なる場合はＭＳ ゴシックで再作成する。
 #[cfg(windows)]
-fn resolve_gdi_font_name(font_name: &str) -> String {
-    use windows::Win32::Graphics::Gdi::GetTextFaceW;
-
-    // GDI がフォント未検出時にフォールバックするフォント名
-    const GDI_FALLBACKS: &[&str] = &[
-        "System", "MS Sans Serif", "Arial", "Segoe UI",
-    ];
+fn create_gdi_font(font_name: &str, size_px: f32, no_aa: bool) -> HFONT {
+    let first = font_name.split(',').next().unwrap_or(font_name).trim();
+    let height = -(size_px.round() as i32);
+    let quality = if no_aa { NONANTIALIASED_QUALITY.0 } else { DEFAULT_QUALITY.0 };
 
     unsafe {
-        let hdc = CreateCompatibleDC(None);
-        if hdc.is_invalid() { return "ＭＳ ゴシック".to_string(); }
+        let hfont = create_hfont(first, height, quality);
 
-        let wide = to_wide(font_name);
-        let hfont = CreateFontW(
-            -12, 0, 0, 0, FW_NORMAL.0 as i32, 0, 0, 0,
-            DEFAULT_CHARSET.0 as u32, OUT_TT_PRECIS.0 as u32,
-            CLIP_DEFAULT_PRECIS.0 as u32, DEFAULT_QUALITY.0 as u32,
-            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
-            PCWSTR(wide.as_ptr()),
-        );
-        if hfont.is_invalid() { let _ = DeleteDC(hdc); return "ＭＳ ゴシック".to_string(); }
-        let _ = SelectObject(hdc, hfont);
-
-        let mut buf = vec![0u16; 256];
-        let len = GetTextFaceW(hdc, Some(&mut buf)) as usize;
-        let actual_name = String::from_utf16_lossy(&buf[..len])
-            .trim_end_matches('\0').to_string();
-
-        let _ = DeleteObject(hfont);
-        let _ = DeleteDC(hdc);
-
-        // GDI のデフォルトフォールバック先ならフォントが見つからなかったと判断
-        let fell_back = GDI_FALLBACKS.iter().any(|fb| actual_name.eq_ignore_ascii_case(fb));
-        if fell_back {
-            "ＭＳ ゴシック".to_string()
+        // 実際に選択されたフォント名を確認する
+        let actual = get_hfont_face(&hfont);
+        if font_was_substituted(first, &actual) {
+            // GDI が別フォントにフォールバックした → ＭＳ ゴシックで作り直す
+            let _ = DeleteObject(hfont);
+            // ＭＳ ゴシックは固定ピッチ・ノンアンチエイリアスで作成
+            create_hfont_ms_gothic(height)
         } else {
-            // actual_name は英語/日本語表記ゆれがあるが、GDI は font_name で正しく解決できている
-            font_name.to_string()
+            hfont
         }
     }
 }
 
+/// HFONT を作成する（内部ヘルパー）
 #[cfg(windows)]
-fn create_gdi_font(font_name: &str, size_px: f32, no_aa: bool) -> HFONT {
-    // GDI に渡すフォント名を解決する。
-    // CreateFontW でフォント名が見つからない場合 GDI は自動でフォールバックするが、
-    // そのフォントは ClearType 対応フォントになり no_aa 指定が意図通りに効かない。
-    // そのため CreateFontW → GetTextFace で実際に使われたフォント名を確認し、
-    // 想定フォントと異なれば明示的にＭＳ ゴシックで再作成する。
-    let first = font_name.split(',').next().unwrap_or(font_name).trim();
-    let effective_name = resolve_gdi_font_name(first);
-    let height = -(size_px.round() as i32);
-    let quality = if no_aa { NONANTIALIASED_QUALITY.0 } else { DEFAULT_QUALITY.0 };
-    let name_wide = to_wide(&effective_name);
-    unsafe {
-        CreateFontW(
-            height, 0, 0, 0,
-            FW_NORMAL.0 as i32,
-            0, 0, 0,
-            DEFAULT_CHARSET.0 as u32,
-            OUT_TT_PRECIS.0 as u32,
-            CLIP_DEFAULT_PRECIS.0 as u32,
-            quality as u32,
-            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
-            PCWSTR(name_wide.as_ptr()),
-        )
-    }
+unsafe fn create_hfont(name: &str, height: i32, quality: u8) -> HFONT {
+    let wide = to_wide(name);
+    CreateFontW(
+        height, 0, 0, 0,
+        FW_NORMAL.0 as i32, 0, 0, 0,
+        DEFAULT_CHARSET.0 as u32,
+        OUT_TT_PRECIS.0 as u32,
+        CLIP_DEFAULT_PRECIS.0 as u32,
+        quality as u32,
+        (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+        PCWSTR(wide.as_ptr()),
+    )
+}
+
+/// ＭＳ ゴシックを固定ピッチ・ノンアンチエイリアスで作成する
+#[cfg(windows)]
+unsafe fn create_hfont_ms_gothic(height: i32) -> HFONT {
+    let wide = to_wide("ＭＳ ゴシック");
+    CreateFontW(
+        height, 0, 0, 0,
+        FW_NORMAL.0 as i32, 0, 0, 0,
+        DEFAULT_CHARSET.0 as u32,
+        OUT_TT_PRECIS.0 as u32,
+        CLIP_DEFAULT_PRECIS.0 as u32,
+        NONANTIALIASED_QUALITY.0 as u32,
+        (FIXED_PITCH.0 | FF_MODERN.0) as u32,
+        PCWSTR(wide.as_ptr()),
+    )
+}
+
+/// HFONT の実際のフォントフェイス名を取得する
+#[cfg(windows)]
+unsafe fn get_hfont_face(hfont: &HFONT) -> String {
+    use windows::Win32::Graphics::Gdi::GetTextFaceW;
+    let hdc = CreateCompatibleDC(None);
+    if hdc.is_invalid() { return String::new(); }
+    let prev = SelectObject(hdc, *hfont);
+    let mut buf = vec![0u16; 256];
+    let len = GetTextFaceW(hdc, Some(&mut buf)) as usize;
+    let _ = SelectObject(hdc, prev);
+    let _ = DeleteDC(hdc);
+    String::from_utf16_lossy(&buf[..len]).trim_end_matches('\0').to_string()
+}
+
+/// 要求フォント名と実際のフォント名が「別物」かどうかを判定する。
+/// GDI は英語名↔日本語名の表記ゆれがあるため、単純な文字列比較ではなく
+/// 共通部分文字列の有無で判定する。
+#[cfg(windows)]
+fn font_was_substituted(requested: &str, actual: &str) -> bool {
+    if actual.is_empty() { return false; }
+    // 空白・大文字小文字を無視して比較
+    let req_key = requested.to_lowercase().replace(' ', "");
+    let act_key = actual.to_lowercase().replace(' ', "");
+    // actual が requested を含む、または requested が actual を含む → 同じフォントとみなす
+    !act_key.contains(&req_key) && !req_key.contains(&act_key)
 }
 
 /// 32bpp トップダウン DIBSection を作成する。
