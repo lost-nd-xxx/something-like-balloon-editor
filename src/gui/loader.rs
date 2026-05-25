@@ -66,6 +66,21 @@ fn load_asset_folder_inner(state: &mut AppState, keep_texts: bool) -> anyhow::Re
         state.descript_text = read_utf8(&asset_dir.join("descript.txt"));
         state.install_text  = read_utf8(&asset_dir.join("install.txt"));
         state.readme_text   = read_utf8(&asset_dir.join("readme.txt"));
+
+        // 個別設定ファイル（{バルーン名}s.txt）を自動検出して読み込む
+        // 例: balloonk3.png → balloonk3s.txt
+        state.individual_texts.clear();
+        for balloon_name in &state.preview_balloons {
+            let stem = balloon_name.trim_end_matches(".png");
+            let cfg_name = format!("{}s.txt", stem);
+            let cfg_path = asset_dir.join(&cfg_name);
+            if cfg_path.exists() {
+                let text = read_utf8(&cfg_path);
+                if !text.is_empty() {
+                    state.individual_texts.insert(cfg_name, text);
+                }
+            }
+        }
     }
 
     // バルーン画像キャッシュをクリアして再構築

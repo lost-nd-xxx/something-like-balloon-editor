@@ -108,10 +108,18 @@ impl BalloonEditorApp {
 
         let balloon_name = self.state.selected_balloon.trim_end_matches(".png").to_string();
         let cfg_key = format!("{}s.txt", balloon_name);
-        let descript_text = self.state.individual_texts
-            .get(&cfg_key)
-            .cloned()
-            .unwrap_or_else(|| self.state.descript_text.clone());
+        // 個別設定と共通設定をマージ（個別設定が優先、差分ファイル仕様に対応）
+        // 共通設定をベースに個別設定のキーを上書きしたテキストを生成する
+        let descript_text = if let Some(indiv) = self.state.individual_texts.get(&cfg_key) {
+            let indiv_parsed = crate::core::descript::parse_descript(indiv);
+            let mut merged = self.state.descript_text.clone();
+            for (k, v) in &indiv_parsed {
+                merged = crate::core::descript::set_descript_value(&merged, k, v);
+            }
+            merged
+        } else {
+            self.state.descript_text.clone()
+        };
 
         let empty_map = std::collections::HashMap::new();
         let parts = self.state.parts_cache

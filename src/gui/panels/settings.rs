@@ -32,7 +32,7 @@ fn show_basic_info_section(ui: &mut Ui, app: &mut BalloonEditorApp) {
         .show(ui, |ui| {
             let fields: &[(&str, &str)] = &[
                 ("name",        "バルーン名"),
-                ("craftman",    "作者名（半角英数）"),
+                ("craftman",    "作者名(半角英数)"),
                 ("craftmanw",   "作者名"),
                 ("craftmanurl", "作者URL"),
                 ("homeurl",     "更新URL"),
@@ -147,13 +147,8 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                             // 影スタイルは対応する影色が none のときグレーアウト
                             let enabled = if field.key.ends_with(".shadowstyle") {
                                 let shadow_color_key = field.key.trim_end_matches("style").to_string() + "color.r";
-                                let descript_text = if use_individual {
-                                    app.state.individual_texts.get(&cfg_key).cloned().unwrap_or_default()
-                                } else {
-                                    app.state.descript_text.clone()
-                                };
-                                let parsed = parse_descript(&descript_text);
-                                parsed.get(&shadow_color_key).map(|v| v.to_lowercase()) != Some("none".to_string())
+                                let v = resolve_field_value(app, &shadow_color_key, &cfg_key, use_individual);
+                                v.to_lowercase() != "none"
                             } else {
                                 true
                             };
@@ -168,6 +163,32 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
     }
 }
 
+/// 個別設定→共通設定→dynamic_defaults→field.default の優先順でキーの値を解決する。
+/// 個別設定にキーがなければ共通設定にフォールバックする（差分設定ファイル仕様への対応）。
+fn resolve_field_value(
+    app: &BalloonEditorApp,
+    field_key: &str,
+    cfg_key: &str,
+    use_individual: bool,
+) -> String {
+    if use_individual {
+        // 個別設定にキーがあればそちらを優先
+        let indiv_text = app.state.individual_texts.get(cfg_key).cloned().unwrap_or_default();
+        let indiv_parsed = parse_descript(&indiv_text);
+        if let Some(v) = indiv_parsed.get(field_key) {
+            return v.clone();
+        }
+    }
+    // 共通設定にフォールバック
+    let global_parsed = parse_descript(&app.state.descript_text);
+    if let Some(v) = global_parsed.get(field_key) {
+        return v.clone();
+    }
+    // dynamic_defaults → field.default
+    app.state.dynamic_defaults.get(field_key).cloned()
+        .unwrap_or_default()
+}
+
 fn show_field_widget(
     ui: &mut Ui,
     app: &mut BalloonEditorApp,
@@ -176,30 +197,41 @@ fn show_field_widget(
     cfg_key: &str,
     use_individual: bool,
 ) {
-    // descript から現在値を取得
-    let descript_text = if use_individual {
-        app.state.individual_texts.get(cfg_key).cloned().unwrap_or_default()
-    } else {
-        app.state.descript_text.clone()
+    // 現在値を優先順位に従って解決:
+    // 個別設定 → 共通設定(descript_text) → dynamic_defaults → field.default
+    let current_str = {
+        let v = resolve_field_value(app, field.key, cfg_key, use_individual);
+        if v.is_empty() { field.default.to_string() } else { v }
     };
-    let parsed = parse_descript(&descript_text);
-    let current_str = parsed.get(field.key).cloned().unwrap_or_else(|| {
-        app.state.dynamic_defaults.get(field.key).cloned()
-            .unwrap_or_else(|| field.default.to_string())
-    });
 
     match field.field_type {
         FieldType::Color | FieldType::ColorNone => {
-            // 仕様上の色キーは .r/.g/.b 形式のみ。.r キーが "none" なら none 扱い。
+            // 色は .r/.g/.b 形式で解決する。個別設定 → 共通設定の順で parsed を合成。
+            let indiv_parsed = if use_individual {
+                parse_descript(&app.state.individual_texts.get(cfg_key).cloned().unwrap_or_default())
+            } else {
+                std::collections::HashMap::new()
+            };
+            let global_parsed = parse_descript(&app.state.descript_text);
+
+            // キーの参照: 個別設定になければ共通設定から取る
+            let get_key = |k: &str| -> Option<String> {
+                indiv_parsed.get(k).cloned().or_else(|| global_parsed.get(k).cloned())
+            };
+
             let r_key = format!("{}.r", field.key);
-            let r_val = parsed.get(&r_key).map(|s| s.to_lowercase());
+            let r_val = get_key(&r_key).map(|s| s.to_lowercase());
             let color_str = if r_val.as_deref() == Some("none") {
                 "none".to_string()
-            } else if let Some(rgb) = get_color_from_descript(&parsed, field.key) {
-                format!("#{:02X}{:02X}{:02X}", rgb.0, rgb.1, rgb.2)
             } else {
-                // descript に記述なし → field.default を使用
-                field.default.to_string()
+                // .r/.g/.b を合成した一時マップで get_color_from_descript を呼ぶ
+                let mut merged = global_parsed.clone();
+                for (k, v) in &indiv_parsed { merged.insert(k.clone(), v.clone()); }
+                if let Some(rgb) = get_color_from_descript(&merged, field.key) {
+                    format!("#{:02X}{:02X}{:02X}", rgb.0, rgb.1, rgb.2)
+                } else {
+                    field.default.to_string()
+                }
             };
             let allow_none = field.field_type == FieldType::ColorNone;
             show_color_widget(ui, app, ctx, field.key, &color_str, cfg_key, use_individual, allow_none);
@@ -528,8 +560,8 @@ fn show_drag_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp) {
             all_entries.push((area_label, area_target));
             if !is_c {
                 all_entries.push(("折り返し X", DragEditTarget::WordWrap));
-                if parts.contains_key("arrow0.png")    { all_entries.push(("矢印（上）",     DragEditTarget::Arrow0));       }
-                if parts.contains_key("arrow1.png")    { all_entries.push(("矢印（下）",     DragEditTarget::Arrow1));       }
+                if parts.contains_key("arrow0.png")    { all_entries.push(("矢印(上)",     DragEditTarget::Arrow0));       }
+                if parts.contains_key("arrow1.png")    { all_entries.push(("矢印(下)",     DragEditTarget::Arrow1));       }
                 if parts.contains_key("clickwait.png") { all_entries.push(("クリック待ち",   DragEditTarget::ClickWait));    }
                 if has_sstp                             { all_entries.push(("SSTPマーカー",   DragEditTarget::SstpMarker));   }
                 if has_sstp                             { all_entries.push(("SSTPメッセージ", DragEditTarget::SstpMessage));  }

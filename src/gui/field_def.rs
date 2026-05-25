@@ -55,7 +55,7 @@ pub static ACCORDION_GROUPS: &[AccordionGroup] = &[
         ],
     },
     AccordionGroup {
-        name: "選択肢（非選択）", visibility: GroupVisibility::Ks,
+        name: "選択肢(非選択)", visibility: GroupVisibility::Ks,
         fields: &[
             fd!("cursor.notselect.style",       "強調形状", FieldType::Dropdown, STYLE_CHOICES, "none"),
             fd!("cursor.notselect.font.color",  "文字色",   FieldType::Color,    &[], "#0000ff"),
@@ -73,7 +73,7 @@ pub static ACCORDION_GROUPS: &[AccordionGroup] = &[
         ],
     },
     AccordionGroup {
-        name: "アンカー（非選択）", visibility: GroupVisibility::Ks,
+        name: "アンカー(非選択)", visibility: GroupVisibility::Ks,
         fields: &[
             fd!("anchor.notselect.style",       "強調形状", FieldType::Dropdown, STYLE_CHOICES, "none"),
             fd!("anchor.notselect.font.color",  "文字色",   FieldType::Color,    &[], "#0000ff"),

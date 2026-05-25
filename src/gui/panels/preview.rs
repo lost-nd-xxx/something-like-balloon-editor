@@ -21,7 +21,7 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
         ui.strong("プレビュー");
         if let Some(contrast_text) = calc_contrast_label(app) {
             ui.separator();
-            ui.label(egui::RichText::new(contrast_text).small());
+            ui.label(contrast_text);
         }
     });
     ui.separator();
@@ -920,11 +920,14 @@ fn draw_checker(painter: &egui::Painter, rect: egui::Rect) {
 fn calc_contrast_label(app: &BalloonEditorApp) -> Option<String> {
     let balloon_name = app.state.selected_balloon.trim_end_matches(".png");
     let cfg_key = format!("{}s.txt", balloon_name);
-    let descript_text = app.state.individual_texts
-        .get(&cfg_key)
-        .cloned()
-        .unwrap_or_else(|| app.state.descript_text.clone());
-    let parsed = parse_descript(&descript_text);
+    // 個別設定と共通設定をマージ（個別設定が優先、差分ファイル仕様に対応）
+    let parsed = {
+        let mut merged = parse_descript(&app.state.descript_text);
+        if let Some(indiv) = app.state.individual_texts.get(&cfg_key) {
+            for (k, v) in parse_descript(indiv) { merged.insert(k, v); }
+        }
+        merged
+    };
 
     if app.state.is_balloonc() {
         // c*系: communicatebox の背景色 vs 文字色
