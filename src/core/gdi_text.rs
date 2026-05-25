@@ -291,7 +291,7 @@ fn paste_alpha_raw(
             let r = ((p >> 16) & 0xFF) as u8;
             // 輝度ベースでアルファを計算（ClearTypeサブピクセルでR/G/Bが異なる場合に対応）
             let lum = (r as u32 * 299 + g as u32 * 587 + b as u32 * 114) / 1000;
-            let alpha = (255 - lum.min(255) as u8);
+            let alpha = 255 - lum.min(255) as u8;
             if alpha == 0 { continue; }
             let dx = px + rx;
             let dy = py + ry;
