@@ -9,7 +9,7 @@ use egui;
 pub const APP_NAME: &str = "Something Like Balloon Editor";
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const APP_REPOSITORY_URL: &str =
-    "https://github.com/lost-nd-xxx/something_like_balloon_editor/";
+    "https://github.com/lost-nd-xxx/something-like-balloon-editor/";
 
 /// レイヤー定義: (キー名, 表示名, デフォルト色)
 pub const LAYER_DEFS: &[(&str, &str, Rgb)] = &[

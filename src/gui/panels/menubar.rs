@@ -173,7 +173,7 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
         ui.menu_button("ヘルプ", |ui| {
             if ui.button("オンラインマニュアル").clicked() {
                 ui.close_menu();
-                let _ = open::that("https://github.com/lost-nd-xxx/something_like_balloon_editor/blob/main/MANUAL.md");
+                let _ = open::that("https://github.com/lost-nd-xxx/something-like-balloon-editor/blob/main/MANUAL.md");
             }
             if ui.button("リポジトリ").clicked() {
                 ui.close_menu();
