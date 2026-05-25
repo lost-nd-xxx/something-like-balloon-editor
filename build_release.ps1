@@ -47,13 +47,11 @@ foreach ($f in $FilesToCopy) {
     Write-Host "    コピー: $(Split-Path $f -Leaf)"
 }
 
-# resource\assets\something_like_balloon\ をフォルダごとコピー
-$AssetSrc = "$ProjectRoot\resource\assets\something_like_balloon"
-$AssetDst = "$StagingDir\assets\something_like_balloon"
+# resource\assets\ をフォルダごとコピー
+$AssetSrc = "$ProjectRoot\resource\assets"
 if (-not (Test-Path $AssetSrc)) { throw "素材フォルダが見つかりません: $AssetSrc" }
-New-Item -ItemType Directory -Path "$StagingDir\assets" | Out-Null
 Copy-Item $AssetSrc -Destination "$StagingDir\assets" -Recurse
-Write-Host "    コピー: assets\something_like_balloon\"
+Write-Host "    コピー: assets\"
 
 # ---------------------------------------------------------------------------
 # 4. zip 圧縮

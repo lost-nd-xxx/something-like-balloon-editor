@@ -90,7 +90,7 @@ pub fn contrast_ratio(c1: Rgb, c2: Rgb) -> f64 {
 pub fn wcag_level(ratio: f64) -> &'static str {
     if ratio >= 7.0 { "AAA" }
     else if ratio >= 4.5 { "AA" }
-    else if ratio >= 3.0 { "AA（大文字）" }
+    else if ratio >= 3.0 { "AA(大文字)" }
     else { "NG" }
 }
 
@@ -142,5 +142,5 @@ pub fn apca_lc(text_color: Rgb, bg_color: Rgb) -> f64 {
 
 /// APCA Bronze Simple Mode 合否を返す（|Lc| >= 60 で合格）
 pub fn apca_bronze(lc: f64) -> &'static str {
-    if lc.abs() >= 60.0 { "Bronze✓" } else { "Bronze✗" }
+    if lc.abs() >= 60.0 { "Bronze OK" } else { "Bronze NG" }
 }

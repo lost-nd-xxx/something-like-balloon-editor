@@ -20,6 +20,7 @@
 ```
 （任意のフォルダ）/
 ├── balloon_editor.exe        ← 実行ファイル
+├── assets/                   ← サンプル素材フォルダ
 ├── output/                   ← 出力先（自動生成）
 │   └── （出力物フォルダ名）/
 ├── state.json                ← 作業状態の自動保存（自動生成）
@@ -37,7 +38,7 @@
 
 ## 同梱素材について
 
-`assets/something_like_balloon/` は、作者が別途配布しているバルーン素材を改変して同梱したものです。
+`assets/` は、作者が別途配布しているバルーン素材を改変して同梱したものです。
 
 - 原素材: https://github.com/lost-nd-xxx/something_like_balloon/tree/main/something_like_template
 - ライセンス: CC0 1.0 Universal
