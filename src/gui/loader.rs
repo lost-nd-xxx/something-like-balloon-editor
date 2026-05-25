@@ -62,10 +62,34 @@ fn load_asset_folder_inner(state: &mut AppState, keep_texts: bool) -> anyhow::Re
     }
 
     // テキストファイル読み込み（keep_texts のとき既存値を保持）
+    state.load_warnings.clear();
     if !keep_texts {
         state.descript_text = read_utf8(&asset_dir.join("descript.txt"));
         state.install_text  = read_utf8(&asset_dir.join("install.txt"));
         state.readme_text   = read_utf8(&asset_dir.join("readme.txt"));
+
+        // 文字コードチェック: UTF-8 以外であれば警告（それぞれ独立してチェック）
+        for fname in ["descript.txt", "install.txt"] {
+            let path = asset_dir.join(fname);
+            if !path.exists() { continue; }
+            match check_encoding(&path) {
+                EncodingStatus::NonUtf8Bytes => {
+                    state.load_warnings.push(format!(
+                        "{fname} が UTF-8 として読み込めませんでした。\n\
+                         このアプリは UTF-8 のみ対応しています。\n\
+                         文字化けが発生している場合はファイルを UTF-8 に変換してください。"
+                    ));
+                }
+                EncodingStatus::NonUtf8Charset(cs) => {
+                    state.load_warnings.push(format!(
+                        "{fname} の charset が \"{cs}\" に設定されています。\n\
+                         このアプリは UTF-8 のみ対応しています。\n\
+                         文字化けが発生している場合はファイルを UTF-8 に変換してください。"
+                    ));
+                }
+                EncodingStatus::Ok => {}
+            }
+        }
 
         // 個別設定ファイル（{バルーン名}s.txt）を自動検出して読み込む
         // 例: balloonk3.png → balloonk3s.txt
@@ -319,6 +343,45 @@ fn collect_part_files(asset_dir: &Path) -> Vec<PathBuf> {
 
 fn read_utf8(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
+}
+
+enum EncodingStatus {
+    Ok,
+    /// バイト列が UTF-8 として不正
+    NonUtf8Bytes,
+    /// UTF-8 として読めたが charset 行が UTF-8 以外を宣言している
+    NonUtf8Charset(String),
+}
+
+/// ファイルの文字コードを検査する。
+/// 1. バイト列が UTF-8 として不正 → NonUtf8Bytes
+/// 2. UTF-8 として読めたが charset 行が UTF-8 以外 → NonUtf8Charset
+/// 3. 問題なし → Ok
+fn check_encoding(path: &Path) -> EncodingStatus {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(_) => return EncodingStatus::Ok,
+    };
+    // BOM 付き UTF-8 (EF BB BF) はスキップして検査
+    let check_bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
+    match std::str::from_utf8(check_bytes) {
+        Err(_) => EncodingStatus::NonUtf8Bytes,
+        Ok(text) => {
+            // charset 行を探して UTF-8 以外なら警告
+            for line in text.lines() {
+                let line = line.trim();
+                if line.starts_with("//") { continue; }
+                if let Some(rest) = line.strip_prefix("charset,") {
+                    let cs = rest.trim().to_lowercase();
+                    if !cs.is_empty() && cs != "utf-8" && cs != "utf8" {
+                        return EncodingStatus::NonUtf8Charset(rest.trim().to_string());
+                    }
+                    break;
+                }
+            }
+            EncodingStatus::Ok
+        }
+    }
 }
 
 /// パーツ・バルーン画像サイズから動的デフォルト値を計算して state に格納する

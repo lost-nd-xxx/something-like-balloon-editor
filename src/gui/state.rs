@@ -170,6 +170,10 @@ pub struct AppState {
     // --- ドラッグ位置編集 ---
     pub drag_edit_target: Option<DragEditTarget>,
     pub drag_state:       Option<DragState>,
+
+    // --- 読み込み時警告 ---
+    /// 素材フォルダ読み込み時に蓄積された警告メッセージ。呼び出し元がダイアログ表示後クリアする。
+    pub load_warnings: Vec<String>,
 }
 
 /// テキスト・数値入力の編集中バッファ
@@ -233,6 +237,7 @@ impl AppState {
             dynamic_defaults:  HashMap::new(),
             drag_edit_target:  None,
             drag_state:        None,
+            load_warnings:     Vec::new(),
         }
     }
 

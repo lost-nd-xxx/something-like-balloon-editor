@@ -207,6 +207,7 @@ impl BalloonEditorApp {
                     self.state.basic_info.insert("directory".to_string(), v.clone());
                 }
                 self.refresh_preview_texture(ctx);
+                self.flush_load_warnings();
             }
             Err(e) => self.err(format!("読み込みエラー:\n\n{}", e)),
         }
@@ -230,9 +231,18 @@ impl BalloonEditorApp {
                     self.state.basic_info.insert("directory".to_string(), v.clone());
                 }
                 self.refresh_preview_texture(ctx);
+                self.flush_load_warnings();
             }
             Err(e) => self.err(format!("読み込みエラー:\n\n{}", e)),
         }
+    }
+
+    /// load_warnings が溜まっていればダイアログに表示してクリアする
+    fn flush_load_warnings(&mut self) {
+        if self.state.load_warnings.is_empty() { return; }
+        let msg = self.state.load_warnings.join("\n\n");
+        self.state.load_warnings.clear();
+        self.dialog = Some(("文字コード警告".into(), msg));
     }
 
     /// バルーンキャッシュを全件再構築してプレビューを更新する（F5・初期値に戻す等で使用）
