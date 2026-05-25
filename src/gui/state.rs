@@ -268,7 +268,8 @@ impl AppState {
         if let Some(&c) = self.layer_colors.get("edge")  { cs.edge  = c; }
         if let Some(&c) = self.layer_colors.get("text")  { cs.text  = c; }
         if let Some(&c) = self.layer_colors.get("parts") { cs.parts = c; }
-        cs.no_color = self.no_balloon_color;
+        // 画像編集なしモードでは常に色オーバーレイを無効にする
+        cs.no_color = self.no_balloon_color || self.direct_image_mode;
 
         // 個別色で上書き
         if let Some(name) = balloon_name {

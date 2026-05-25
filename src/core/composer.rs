@@ -5,6 +5,116 @@ use image::{ImageBuffer, Rgba, RgbaImage};
 use crate::core::color::{ColorSet, Rgb};
 use crate::core::layout::{ColorType, LayerList, load_balloon_layout, make_odd_flip_sources};
 
+/// PNG ファイルを RGBA 画像として開く。SSP互換の透過処理を適用する。
+///
+/// 優先順位:
+/// 1. 同名 `.pna` が存在する場合: `.png` を RGB、`.pna` をアルファチャンネルとして合成
+/// 2. 32bit PNG (アルファチャンネルあり): そのまま使用
+/// 3. 24bit PNG + tRNS チャンク: tRNS の透過色を alpha=0 として適用
+/// 4. 24bit PNG (tRNSなし): 左上1ピクセルの色をカラーキーとして透過
+pub fn open_png_rgba(path: &Path) -> anyhow::Result<RgbaImage> {
+    // 1. .pna が隣にあるか確認
+    let pna_path = path.with_extension("pna");
+    if pna_path.exists() {
+        return open_png_with_pna(path, &pna_path);
+    }
+
+    // 2/3/4. .pna なし: color_type で分岐
+    let dyn_img = image::open(path)
+        .map_err(|e| anyhow::anyhow!("{}: {}", path.display(), e))?;
+
+    match dyn_img.color() {
+        // 32bit RGBA: アルファそのまま
+        image::ColorType::Rgba8 | image::ColorType::Rgba16 | image::ColorType::Rgba32F => {
+            Ok(dyn_img.to_rgba8())
+        }
+        // 24bit RGB: tRNS or 左上1px 透過
+        _ => {
+            let rgb = dyn_img.to_rgb8();
+            apply_rgb_transparency(path, rgb)
+        }
+    }
+}
+
+/// .pna ファイルをアルファチャンネルとして合成する
+/// .pna は拡張子が非標準のため image::open が使えない。ファイルバイト列を PNG としてデコードする。
+fn open_png_with_pna(png_path: &Path, pna_path: &Path) -> anyhow::Result<RgbaImage> {
+    let rgb = image::open(png_path)
+        .map_err(|e| anyhow::anyhow!("{}: {}", png_path.display(), e))?
+        .to_rgb8();
+
+    // .pna をバイト列として読み込み PNG デコード
+    let pna_bytes = std::fs::read(pna_path)
+        .map_err(|e| anyhow::anyhow!("{}: {}", pna_path.display(), e))?;
+    let alpha_dyn = image::load_from_memory_with_format(&pna_bytes, image::ImageFormat::Png)
+        .map_err(|e| anyhow::anyhow!("{}: {}", pna_path.display(), e))?;
+    let alpha = alpha_dyn.to_luma8();
+
+    let (w, h) = rgb.dimensions();
+    if alpha.dimensions() != (w, h) {
+        anyhow::bail!(
+            ".pna のサイズ({:?})が .png({:?})と一致しません: {}",
+            alpha.dimensions(), (w, h), pna_path.display()
+        );
+    }
+
+    let mut rgba = RgbaImage::new(w, h);
+    for (x, y, rgb_px) in rgb.enumerate_pixels() {
+        let a = alpha.get_pixel(x, y)[0];
+        rgba.put_pixel(x, y, Rgba([rgb_px[0], rgb_px[1], rgb_px[2], a]));
+    }
+    Ok(rgba)
+}
+
+/// 24bit RGB 画像に透過を適用する。
+/// tRNS チャンクがあればその色を透明に、なければ左上1pxの色をカラーキーとして透明にする。
+fn apply_rgb_transparency(path: &Path, rgb: image::RgbImage) -> anyhow::Result<RgbaImage> {
+    let key = read_trns_key(path).or_else(|| {
+        // tRNS なし → 左上1pxをカラーキーに
+        let px = rgb.get_pixel(0, 0);
+        Some((px[0], px[1], px[2]))
+    });
+
+    let (w, h) = rgb.dimensions();
+    let mut rgba = RgbaImage::new(w, h);
+    for (x, y, px) in rgb.enumerate_pixels() {
+        let a = match key {
+            Some((kr, kg, kb)) if px[0] == kr && px[1] == kg && px[2] == kb => 0,
+            _ => 255,
+        };
+        rgba.put_pixel(x, y, Rgba([px[0], px[1], px[2], a]));
+    }
+    Ok(rgba)
+}
+
+/// PNG ファイルの tRNS チャンクから RGB 透過色を読み取る。
+/// tRNS がない・読み取り失敗の場合は None を返す。
+fn read_trns_key(path: &Path) -> Option<(u8, u8, u8)> {
+    use png::Decoder;
+    use std::fs::File;
+    use std::io::BufReader;
+
+    let file = File::open(path).ok()?;
+    let decoder = Decoder::new(BufReader::new(file));
+    let reader = decoder.read_info().ok()?;
+    let info = reader.info();
+
+    // tRNS（RGB トリプレット、各16bit big-endian）
+    // 8bit PNG の場合: 上位バイト=0x00, 下位バイト=実際の値 → trns[1], trns[3], trns[5]
+    // ただし SSP 互換素材は 8bit 値を上位バイトに置く場合もあるため、
+    // 16bit 値として取り出して >> 8 するか、下位バイトを取る両方を試みる
+    if let Some(trns) = &info.trns {
+        if trns.len() >= 6 {
+            // PNG 仕様: big-endian 16bit。8bit 画像なら下位バイトが実値
+            let r = (u16::from_be_bytes([trns[0], trns[1]]) & 0xFF) as u8;
+            let g = (u16::from_be_bytes([trns[2], trns[3]]) & 0xFF) as u8;
+            let b = (u16::from_be_bytes([trns[4], trns[5]]) & 0xFF) as u8;
+            return Some((r, g, b));
+        }
+    }
+    None
+}
+
 /// RGBA画像のアルファ形状を保ったまま RGB を指定色で塗り替える
 ///
 /// no_color=true のときは元画像の RGBA をそのまま返す
@@ -76,9 +186,7 @@ pub fn build_balloon_from_layout(
     let mut rendered: Vec<RgbaImage> = Vec::new();
     for (fname, ctype) in layers {
         let path = balloon_dir.join(fname);
-        let img = image::open(&path)
-            .map_err(|e| anyhow::anyhow!("{}: {}", path.display(), e))?
-            .to_rgba8();
+        let img = open_png_rgba(&path)?;
 
         let color = color_map(ctype);
         if color.is_none() || colors.no_color {
@@ -145,9 +253,7 @@ pub fn build_parts(
     sorted.sort();
 
     for f in &sorted {
-        let img = image::open(f)
-            .map_err(|e| anyhow::anyhow!("{}: {}", f.display(), e))?
-            .to_rgba8();
+        let img = open_png_rgba(f)?;
 
         let stem = f.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         let color = if let Some(pc) = parts_colors {

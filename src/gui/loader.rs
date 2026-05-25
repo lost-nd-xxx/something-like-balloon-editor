@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use crate::core::{
     color::Rgb,
-    composer::{build_all_balloons, build_parts},
+    composer::{build_all_balloons, build_parts, open_png_rgba},
     layout::{
         detect_direct_balloons, is_direct_image_mode, load_balloon_layout,
         make_odd_flip_sources, sort_key,
@@ -104,14 +104,14 @@ pub fn rebuild_balloon_cache(state: &mut AppState, asset_dir: &Path) -> anyhow::
             let path = asset_dir.join(name);
             // 奇数番で元ファイルがない場合は偶数番を反転
             let img = if path.exists() {
-                image::open(&path)?.to_rgba8()
+                open_png_rgba(&path)?
             } else {
                 // 偶数番を反転して生成
                 let even = even_name_of(stem);
                 let even_path = asset_dir.join(format!("{}.png", even));
                 if even_path.exists() {
                     crate::core::composer::flip_horizontal(
-                        &image::open(&even_path)?.to_rgba8(),
+                        &open_png_rgba(&even_path)?,
                     )
                 } else {
                     continue;
@@ -151,12 +151,12 @@ pub fn rebuild_selected_balloon(state: &mut AppState, asset_dir: &Path) -> anyho
         // 画像編集なしモード: 選択バルーンのみ読み込む
         let path = asset_dir.join(&selected);
         let img = if path.exists() {
-            image::open(&path)?.to_rgba8()
+            open_png_rgba(&path)?
         } else {
             let even = even_name_of(&selected_stem);
             let even_path = asset_dir.join(format!("{}.png", even));
             if even_path.exists() {
-                crate::core::composer::flip_horizontal(&image::open(&even_path)?.to_rgba8())
+                crate::core::composer::flip_horizontal(&open_png_rgba(&even_path)?)
             } else {
                 return Ok(());
             }
@@ -207,12 +207,12 @@ pub fn ensure_balloon_cached(state: &mut AppState, asset_dir: &Path) -> anyhow::
     if state.direct_image_mode {
         let path = asset_dir.join(&selected);
         let img = if path.exists() {
-            image::open(&path)?.to_rgba8()
+            open_png_rgba(&path)?
         } else {
             let even = even_name_of(&selected_stem);
             let even_path = asset_dir.join(format!("{}.png", even));
             if even_path.exists() {
-                crate::core::composer::flip_horizontal(&image::open(&even_path)?.to_rgba8())
+                crate::core::composer::flip_horizontal(&open_png_rgba(&even_path)?)
             } else {
                 return Ok(());
             }
@@ -253,12 +253,12 @@ pub fn build_all_balloons_for_export(
             let stem = name.trim_end_matches(".png");
             let path = asset_dir.join(name);
             let img = if path.exists() {
-                image::open(&path)?.to_rgba8()
+                open_png_rgba(&path)?
             } else {
                 let even = even_name_of(stem);
                 let even_path = asset_dir.join(format!("{}.png", even));
                 if even_path.exists() {
-                    crate::core::composer::flip_horizontal(&image::open(&even_path)?.to_rgba8())
+                    crate::core::composer::flip_horizontal(&open_png_rgba(&even_path)?)
                 } else {
                     continue;
                 }

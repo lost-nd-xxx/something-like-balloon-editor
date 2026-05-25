@@ -562,6 +562,7 @@ dependencies = [
  "fontdue",
  "image",
  "open",
+ "png",
  "regex",
  "rfd",
  "serde",
