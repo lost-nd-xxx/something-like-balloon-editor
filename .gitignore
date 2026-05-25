@@ -11,4 +11,4 @@ target/
 debag_run.bat
 
 # リリース出力
-balloon_editor.zip
+something-like-balloon-editor_v*.zip
