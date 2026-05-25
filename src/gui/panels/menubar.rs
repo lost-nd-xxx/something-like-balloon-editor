@@ -99,20 +99,6 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
             }
             ui.separator();
 
-            // テーマ
-            ui.label("テーマ:");
-            for (mode, label) in [
-                (ThemeMode::Light, "ライト"),
-                (ThemeMode::Dark,  "ダーク"),
-            ] {
-                if ui.radio(app.state.theme == mode, label).clicked() {
-                    app.state.theme = mode;
-                    crate::gui::app::apply_theme(ctx, mode);
-                    ui.close_menu();
-                }
-            }
-            ui.separator();
-
             // テキスト域オーバーレイ
             let mut overlay_on = app.state.overlay_mode == "layout";
             if ui.checkbox(&mut overlay_on, "テキスト域オーバーレイ表示").changed() {
@@ -121,47 +107,60 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
             }
             ui.separator();
 
-            // プレビューテキストモード
-            ui.label("プレビューテキスト:");
-            if ui.radio(app.state.preview_text_mode == PreviewTextMode::A, "A: 通常サンプル").clicked() {
-                app.state.preview_text_mode = PreviewTextMode::A;
-                app.refresh_preview_texture(ctx);
-            }
-            if ui.radio(app.state.preview_text_mode == PreviewTextMode::B, "B: 折り返し幅確認").clicked() {
-                app.state.preview_text_mode = PreviewTextMode::B;
-                app.refresh_preview_texture(ctx);
-            }
-            ui.separator();
+            // テーマ（サブメニュー）
+            ui.menu_button("テーマ", |ui| {
+                for (mode, label) in [
+                    (ThemeMode::Light, "ライト"),
+                    (ThemeMode::Dark,  "ダーク"),
+                ] {
+                    if ui.radio(app.state.theme == mode, label).clicked() {
+                        app.state.theme = mode;
+                        crate::gui::app::apply_theme(ctx, mode);
+                        ui.close_menu();
+                    }
+                }
+            });
 
-            // キャンバス背景
-            ui.label("背景:");
-            if ui.radio(matches!(app.state.canvas_bg, crate::gui::state::CanvasBg::Checker), "チェッカー").clicked() {
-                app.state.canvas_bg = crate::gui::state::CanvasBg::Checker;
-                app.refresh_preview_texture(ctx);
-            }
-            let is_solid = matches!(app.state.canvas_bg, crate::gui::state::CanvasBg::Solid(..));
-            // 現在の単色背景色を取得
-            let (sr, sg, sb) = if let crate::gui::state::CanvasBg::Solid(r,g,b) = app.state.canvas_bg {
-                (r, g, b)
-            } else { (255, 255, 255) };
-            ui.horizontal(|ui| {
-                if ui.radio(is_solid, "単色背景").clicked() {
-                    app.state.canvas_bg = crate::gui::state::CanvasBg::Solid(sr, sg, sb);
+            // プレビューテキスト（サブメニュー）
+            ui.menu_button("プレビューテキスト", |ui| {
+                if ui.radio(app.state.preview_text_mode == PreviewTextMode::A, "A: 通常サンプル").clicked() {
+                    app.state.preview_text_mode = PreviewTextMode::A;
                     app.refresh_preview_texture(ctx);
                     ui.close_menu();
                 }
-                let swatch = egui::Color32::from_rgb(sr, sg, sb);
-                let (rect, _) = ui.allocate_exact_size(
-                    egui::vec2(20.0, 20.0),
-                    egui::Sense::click(),
-                );
-                ui.painter().rect_filled(rect, 2.0, swatch);
-                ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.fg_stroke.color));
-                if ui.interact(rect, ui.id().with("bg_swatch"), egui::Sense::click()).clicked() {
-                    app.state.canvas_bg = crate::gui::state::CanvasBg::Solid(sr, sg, sb);
-                    app.state.show_bg_color_window = true;
+                if ui.radio(app.state.preview_text_mode == PreviewTextMode::B, "B: 折り返し幅確認").clicked() {
+                    app.state.preview_text_mode = PreviewTextMode::B;
+                    app.refresh_preview_texture(ctx);
                     ui.close_menu();
                 }
+            });
+
+            // プレビュー背景（サブメニュー）
+            let is_solid = matches!(app.state.canvas_bg, crate::gui::state::CanvasBg::Solid(..));
+            // 単色色は canvas_bg_solid_color から取得（チェッカー中も保持）
+            let (sr, sg, sb) = app.state.canvas_bg_solid_color;
+            ui.menu_button("プレビュー背景", |ui| {
+                if ui.radio(matches!(app.state.canvas_bg, crate::gui::state::CanvasBg::Checker), "チェッカー").clicked() {
+                    app.state.canvas_bg = crate::gui::state::CanvasBg::Checker;
+                    app.refresh_preview_texture(ctx);
+                    ui.close_menu();
+                }
+                ui.horizontal(|ui| {
+                    if ui.radio(is_solid, "単色背景").clicked() {
+                        app.state.canvas_bg = crate::gui::state::CanvasBg::Solid(sr, sg, sb);
+                        app.refresh_preview_texture(ctx);
+                        ui.close_menu();
+                    }
+                    let swatch = egui::Color32::from_rgb(sr, sg, sb);
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+                    ui.painter().rect_filled(rect, 2.0, swatch);
+                    ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.fg_stroke.color));
+                    if ui.interact(rect, ui.id().with("bg_swatch"), egui::Sense::click()).clicked() {
+                        app.state.canvas_bg = crate::gui::state::CanvasBg::Solid(sr, sg, sb);
+                        app.state.show_bg_color_window = true;
+                        ui.close_menu();
+                    }
+                });
             });
         });
 

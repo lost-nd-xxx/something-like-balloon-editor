@@ -136,6 +136,8 @@ pub struct AppState {
     pub preview_text_mode:  PreviewTextMode,
     pub overlay_mode:       String, // "" / "layout"
     pub canvas_bg:          CanvasBg,
+    /// 単色背景の色（チェッカー選択中も保持）
+    pub canvas_bg_solid_color: (u8, u8, u8),
     #[allow(dead_code)]
     pub edit_mode:          String, // "" / パーツID
     pub panel_left_width:   f32,
@@ -220,6 +222,7 @@ impl AppState {
             preview_text_mode: PreviewTextMode::A,
             overlay_mode:      String::new(),
             canvas_bg:         CanvasBg::Checker,
+            canvas_bg_solid_color: (255, 255, 255),
             edit_mode:         String::new(),
             parts_targets:     vec![("全て".to_string(), "all".to_string())],
             parts_target:      "全て".to_string(),

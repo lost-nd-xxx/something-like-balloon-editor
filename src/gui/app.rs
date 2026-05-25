@@ -156,7 +156,7 @@ impl BalloonEditorApp {
                 self.preview_texture = Some(ctx.load_texture(
                     "preview",
                     color_image,
-                    TextureOptions::default(),
+                    TextureOptions::NEAREST,
                 ));
                 self.state.preview_generating = false;
             }
@@ -435,9 +435,7 @@ impl eframe::App for BalloonEditorApp {
 
         // 単色背景カラーピッカーウィンドウ
         if self.state.show_bg_color_window {
-            let (mut sr, mut sg, mut sb) = if let crate::gui::state::CanvasBg::Solid(r,g,b) = self.state.canvas_bg {
-                (r, g, b)
-            } else { (255, 255, 255) };
+            let (mut sr, mut sg, mut sb) = self.state.canvas_bg_solid_color;
             let mut open = true;
             egui::Window::new("背景色")
                 .open(&mut open)
@@ -449,6 +447,7 @@ impl eframe::App for BalloonEditorApp {
                         ui, &mut col, egui::color_picker::Alpha::Opaque,
                     ) {
                         sr = col.r(); sg = col.g(); sb = col.b();
+                        self.state.canvas_bg_solid_color = (sr, sg, sb);
                         self.state.canvas_bg = crate::gui::state::CanvasBg::Solid(sr, sg, sb);
                         self.refresh_preview_texture(ctx);
                     }

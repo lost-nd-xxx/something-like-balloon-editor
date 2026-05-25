@@ -8,8 +8,8 @@ use windows::{
     core::PCWSTR,
     Win32::Foundation::{COLORREF, RECT},
     Win32::Graphics::Gdi::{
-        CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, DeleteDC, DeleteObject,
-        GetDIBits, SelectObject, SetBkMode, SetTextColor, TextOutW,
+        CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject,
+        SelectObject, SetBkMode, SetTextColor, TextOutW,
         BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
         DEFAULT_PITCH, DIB_RGB_COLORS, FF_DONTCARE, NONANTIALIASED_QUALITY,
         OUT_TT_PRECIS, TRANSPARENT, FW_NORMAL, DEFAULT_QUALITY,
@@ -31,6 +31,8 @@ pub struct GdiSession {
     bmp_w:    i32,
     bmp_h:    i32,
     bg_brush: windows::Win32::Graphics::Gdi::HBRUSH,
+    /// DIBSection のピクセルバッファへの生ポインタ（GDI 管理）
+    dib_ptr:  *mut u32,
     pub raw_buf: Vec<u32>,
 }
 
@@ -38,10 +40,8 @@ pub struct GdiSession {
 impl GdiSession {
     pub fn new(font_name: &str, size_px: f32, no_aa: bool) -> Option<Self> {
         unsafe {
-            let hdc_screen = windows::Win32::Graphics::Gdi::GetDC(None);
-            if hdc_screen.is_invalid() { return None; }
-            let hdc = CreateCompatibleDC(hdc_screen);
-            windows::Win32::Graphics::Gdi::ReleaseDC(None, hdc_screen);
+            // スクリーン DC なしで Memory DC を作成（DIBSection はデバイス非依存）
+            let hdc = CreateCompatibleDC(None);
             if hdc.is_invalid() { return None; }
 
             let hfont = create_gdi_font(font_name, size_px, no_aa);
@@ -53,32 +53,33 @@ impl GdiSession {
 
             let bg_brush = CreateSolidBrush(COLORREF(0x00FFFFFF));
 
-            let hdc_screen2 = windows::Win32::Graphics::Gdi::GetDC(None);
-            let hbmp = CreateCompatibleBitmap(hdc_screen2, 1, 1);
-            windows::Win32::Graphics::Gdi::ReleaseDC(None, hdc_screen2);
+            // 初期 DIBSection（1x1）
+            let mut dib_ptr: *mut u32 = std::ptr::null_mut();
+            let hbmp = create_dib_section(hdc, 1, 1, &mut dib_ptr)?;
             let _ = SelectObject(hdc, hbmp);
 
-            Some(Self { hdc, hfont, hbmp, bmp_w: 1, bmp_h: 1, bg_brush, raw_buf: Vec::new() })
+            Some(Self { hdc, hfont, hbmp, bmp_w: 1, bmp_h: 1, bg_brush, dib_ptr, raw_buf: Vec::new() })
         }
     }
 
-    /// 必要なサイズのビットマップを確保する。
-    /// サイズが変わるたびに作り直してストライドを描画幅に一致させる。
+    /// 必要なサイズの DIBSection を確保する。サイズが変わるたびに作り直す。
     pub fn ensure_bmp(&mut self, w: i32, h: i32) {
         if w == self.bmp_w && h == self.bmp_h { return; }
         unsafe {
-            let hdc_screen = windows::Win32::Graphics::Gdi::GetDC(None);
-            let new_bmp = CreateCompatibleBitmap(hdc_screen, w, h);
-            windows::Win32::Graphics::Gdi::ReleaseDC(None, hdc_screen);
-            let _ = SelectObject(self.hdc, new_bmp);
-            let _ = DeleteObject(self.hbmp);
-            self.hbmp = new_bmp;
-            self.bmp_w = w;
-            self.bmp_h = h;
+            let mut dib_ptr: *mut u32 = std::ptr::null_mut();
+            if let Some(new_bmp) = create_dib_section(self.hdc, w, h, &mut dib_ptr) {
+                let _ = SelectObject(self.hdc, new_bmp);
+                let _ = DeleteObject(self.hbmp);
+                self.hbmp  = new_bmp;
+                self.bmp_w = w;
+                self.bmp_h = h;
+                self.dib_ptr = dib_ptr;
+            }
         }
     }
 
     /// ビットマップに描画して raw_buf を更新する。
+    /// DIBSection のピクセルポインタから直接コピーするため GetDIBits 不要。
     pub fn render_to_bmp(&mut self, text: &str, w: i32, h: i32) {
         unsafe {
             let rc = RECT { left: 0, top: 0, right: w, bottom: h };
@@ -88,12 +89,9 @@ impl GdiSession {
             let _ = TextOutW(self.hdc, 0, 0, wide_no_null);
             let pixel_count = (w * h) as usize;
             self.raw_buf.resize(pixel_count, 0u32);
-            let mut bmi = make_bmi(w, h);
-            let _ = GetDIBits(
-                self.hdc, self.hbmp, 0, h as u32,
-                Some(self.raw_buf.as_mut_ptr() as *mut _),
-                &mut bmi, DIB_RGB_COLORS,
-            );
+            if !self.dib_ptr.is_null() {
+                std::ptr::copy_nonoverlapping(self.dib_ptr, self.raw_buf.as_mut_ptr(), pixel_count);
+            }
         }
     }
 
@@ -306,11 +304,65 @@ fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// 指定フォント名が GDI に存在するか確認し、存在すればそのまま、なければ "ＭＳ ゴシック" を返す。
+/// CreateFontW → GetTextFaceW で実際に使われたフォント名を確認し、
+/// GDI のデフォルトフォールバック先（System / MS Sans Serif / Arial 等）と一致する場合は
+/// フォントが見つからなかったと判断する。
+#[cfg(windows)]
+fn resolve_gdi_font_name(font_name: &str) -> String {
+    use windows::Win32::Graphics::Gdi::GetTextFaceW;
+
+    // GDI がフォント未検出時にフォールバックするフォント名
+    const GDI_FALLBACKS: &[&str] = &[
+        "System", "MS Sans Serif", "Arial", "Segoe UI",
+    ];
+
+    unsafe {
+        let hdc = CreateCompatibleDC(None);
+        if hdc.is_invalid() { return "ＭＳ ゴシック".to_string(); }
+
+        let wide = to_wide(font_name);
+        let hfont = CreateFontW(
+            -12, 0, 0, 0, FW_NORMAL.0 as i32, 0, 0, 0,
+            DEFAULT_CHARSET.0 as u32, OUT_TT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32, DEFAULT_QUALITY.0 as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            PCWSTR(wide.as_ptr()),
+        );
+        if hfont.is_invalid() { let _ = DeleteDC(hdc); return "ＭＳ ゴシック".to_string(); }
+        let _ = SelectObject(hdc, hfont);
+
+        let mut buf = vec![0u16; 256];
+        let len = GetTextFaceW(hdc, Some(&mut buf)) as usize;
+        let actual_name = String::from_utf16_lossy(&buf[..len])
+            .trim_end_matches('\0').to_string();
+
+        let _ = DeleteObject(hfont);
+        let _ = DeleteDC(hdc);
+
+        // GDI のデフォルトフォールバック先ならフォントが見つからなかったと判断
+        let fell_back = GDI_FALLBACKS.iter().any(|fb| actual_name.eq_ignore_ascii_case(fb));
+        if fell_back {
+            "ＭＳ ゴシック".to_string()
+        } else {
+            // actual_name は英語/日本語表記ゆれがあるが、GDI は font_name で正しく解決できている
+            font_name.to_string()
+        }
+    }
+}
+
 #[cfg(windows)]
 fn create_gdi_font(font_name: &str, size_px: f32, no_aa: bool) -> HFONT {
+    // GDI に渡すフォント名を解決する。
+    // CreateFontW でフォント名が見つからない場合 GDI は自動でフォールバックするが、
+    // そのフォントは ClearType 対応フォントになり no_aa 指定が意図通りに効かない。
+    // そのため CreateFontW → GetTextFace で実際に使われたフォント名を確認し、
+    // 想定フォントと異なれば明示的にＭＳ ゴシックで再作成する。
+    let first = font_name.split(',').next().unwrap_or(font_name).trim();
+    let effective_name = resolve_gdi_font_name(first);
     let height = -(size_px.round() as i32);
     let quality = if no_aa { NONANTIALIASED_QUALITY.0 } else { DEFAULT_QUALITY.0 };
-    let name_wide = to_wide(font_name);
+    let name_wide = to_wide(&effective_name);
     unsafe {
         CreateFontW(
             height, 0, 0, 0,
@@ -326,24 +378,111 @@ fn create_gdi_font(font_name: &str, size_px: f32, no_aa: bool) -> HFONT {
     }
 }
 
+/// 32bpp トップダウン DIBSection を作成する。
+/// ピクセルバッファへのポインタを `bits_ptr` に書き込む。
+/// 成功すると HBITMAP を返す。
 #[cfg(windows)]
-fn make_bmi(w: i32, h: i32) -> BITMAPINFO {
-    BITMAPINFO {
+unsafe fn create_dib_section(hdc: HDC, w: i32, h: i32, bits_ptr: &mut *mut u32) -> Option<HBITMAP> {
+    let bmi = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: w,
-            biHeight: -h,
-            biPlanes: 1,
-            biBitCount: 32,
+            biSize:        std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth:       w,
+            biHeight:      -h, // トップダウン
+            biPlanes:      1,
+            biBitCount:    32,
             biCompression: BI_RGB.0,
-            biSizeImage: 0,
+            biSizeImage:   0,
             biXPelsPerMeter: 0,
             biYPelsPerMeter: 0,
-            biClrUsed: 0,
+            biClrUsed:     0,
             biClrImportant: 0,
         },
         bmiColors: [windows::Win32::Graphics::Gdi::RGBQUAD::default()],
+    };
+    let mut raw_bits: *mut std::ffi::c_void = std::ptr::null_mut();
+    let hbmp = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &mut raw_bits, None, 0).ok()?;
+    if hbmp.is_invalid() { return None; }
+    *bits_ptr = raw_bits as *mut u32;
+    Some(hbmp)
+}
+
+// ---------------------------------------------------------------------------
+// 同梱フォント GDI 登録ガード
+// ---------------------------------------------------------------------------
+
+/// 素材フォルダ内のフォントファイルを GDI にプライベート登録し、
+/// Drop 時に自動解除する RAII ガード。
+/// 登録に成功したフォントの GDI フォント名（PostScript/family name）を返す。
+#[cfg(windows)]
+pub struct PrivateFontGuard {
+    paths: Vec<std::path::PathBuf>,
+}
+
+#[cfg(windows)]
+impl PrivateFontGuard {
+    /// asset_dir 内の .ttf / .otf をすべて GDI にプライベート登録する。
+    /// フォント名の照合は GDI に任せ、登録さえしておけば CreateFontW でフォント名指定が効く。
+    pub fn register_from_dir(_font_name_raw: &str, asset_dir: &std::path::Path) -> Self {
+        use windows::Win32::Graphics::Gdi::AddFontResourceExW;
+        use windows::Win32::Graphics::Gdi::FR_PRIVATE;
+
+        let mut paths = Vec::new();
+
+        let entries = match std::fs::read_dir(asset_dir) {
+            Ok(e) => e,
+            Err(_) => return Self { paths },
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if !matches!(ext.to_ascii_lowercase().as_str(), "ttf" | "otf") {
+                continue;
+            }
+            let wide: Vec<u16> = path.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
+            unsafe {
+                let added = AddFontResourceExW(
+                    windows::core::PCWSTR(wide.as_ptr()),
+                    FR_PRIVATE,
+                    None,
+                );
+                if added > 0 {
+                    paths.push(path);
+                }
+            }
+        }
+
+        Self { paths }
     }
+
+    pub fn is_empty(&self) -> bool { self.paths.is_empty() }
+}
+
+#[cfg(windows)]
+impl Drop for PrivateFontGuard {
+    fn drop(&mut self) {
+        use windows::Win32::Graphics::Gdi::RemoveFontResourceExW;
+        use windows::Win32::Graphics::Gdi::FR_PRIVATE;
+        for path in &self.paths {
+            let wide: Vec<u16> = path.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
+            unsafe {
+                let _ = RemoveFontResourceExW(
+                    windows::core::PCWSTR(wide.as_ptr()),
+                    FR_PRIVATE.0,
+                    None,
+                );
+            }
+        }
+    }
+}
+
+/// Windows 以外向けのダミー
+#[cfg(not(windows))]
+pub struct PrivateFontGuard;
+#[cfg(not(windows))]
+impl PrivateFontGuard {
+    pub fn register_from_dir(_: &str, _: &std::path::Path) -> Self { Self }
+    pub fn is_empty(&self) -> bool { true }
 }
 
 fn blend_px(img: &mut RgbaImage, x: i32, y: i32, col: Rgb, alpha: u8) {

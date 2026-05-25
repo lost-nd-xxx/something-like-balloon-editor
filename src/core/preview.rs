@@ -146,9 +146,17 @@ pub fn draw_preview(
     let parsed = parse_descript(descript_text);
     let vr = build_valid_rect(&parsed, w, h);
 
-    // font.name を読む
-    let font_name = parsed.get("font.name").cloned().unwrap_or_else(|| "ＭＳ ゴシック".to_string());
+    // font.name を読む（空・未設定はＭＳ ゴシックへフォールバック）
+    let font_name = {
+        let v = parsed.get("font.name").map(|s| s.trim().to_string()).unwrap_or_default();
+        if v.is_empty() { "ＭＳ ゴシック".to_string() } else { v }
+    };
     let no_aa = is_bitmap_font(&font_name);
+
+    // 素材フォルダ内の同梱フォントを GDI にプライベート登録（Drop 時に自動解除）
+    let _private_font_guard = opts.asset_dir.as_deref().map(|dir| {
+        gdi_text::PrivateFontGuard::register_from_dir(&font_name, dir)
+    });
 
     // GDI セッション（フォント高さ = font.height の値、なければ 12）
     let font_height: f32 = parsed.get("font.height")
@@ -505,7 +513,7 @@ fn draw_parts(
     _w: i32, _h: i32,
     font_name: &str,
     font: Option<&fontdue::Font>,
-    no_aa: bool,
+    _no_aa: bool,
     sess: &mut Sess,
 ) {
     let (iw, ih) = (img.width() as i32, img.height() as i32);
@@ -571,9 +579,14 @@ fn draw_parts(
         .and_then(|s| s.parse().ok()).unwrap_or(10.0);
     let sstp_col = get_color(parsed, "sstpmessage.font.color")
         .unwrap_or(Rgb(0, 0, 192));
+    let sstp_font_name = {
+        let v = parsed.get("sstpmessage.font.name").map(|s| s.trim().to_string()).unwrap_or_default();
+        if v.is_empty() { font_name.to_string() } else { v }
+    };
+    let sstp_no_aa = is_bitmap_font(&sstp_font_name);
     let sstp_leading = gdi_text::font_internal_leading(
-        font_name.split(',').next().unwrap_or(font_name).trim(), sstp_fh, no_aa);
-    draw_text_on(img, font_name, font, "SSTPメッセージ", ssx, ssy - sstp_leading / 2, sstp_fh, sstp_col, None, None, no_aa, sess);
+        sstp_font_name.split(',').next().unwrap_or(&sstp_font_name).trim(), sstp_fh, sstp_no_aa);
+    draw_text_on(img, &sstp_font_name, font, "SSTPメッセージ", ssx, ssy - sstp_leading / 2, sstp_fh, sstp_col, None, None, sstp_no_aa, sess);
 
     // カウンタ数値
     let num_xr: i32 = parsed.get("number.xr").and_then(|s| s.parse().ok()).unwrap_or(-20);
@@ -582,11 +595,16 @@ fn draw_parts(
         .and_then(|s| s.parse().ok()).unwrap_or(10.0);
     let num_col = get_color(parsed, "number.font.color")
         .unwrap_or(Rgb(0, 0, 0));
-    let tw = measure_text(font_name, font, "999", num_fh, no_aa, sess);
+    let num_font_name = {
+        let v = parsed.get("number.font.name").map(|s| s.trim().to_string()).unwrap_or_default();
+        if v.is_empty() { font_name.to_string() } else { v }
+    };
+    let num_no_aa = is_bitmap_font(&num_font_name);
+    let tw = measure_text(&num_font_name, font, "999", num_fh, num_no_aa, sess);
     let num_x = iw + num_xr - tw as i32;
     let num_leading = gdi_text::font_internal_leading(
-        font_name.split(',').next().unwrap_or(font_name).trim(), num_fh, no_aa);
-    draw_text_on(img, font_name, font, "999", num_x, num_y - num_leading / 2, num_fh, num_col, None, None, no_aa, sess);
+        num_font_name.split(',').next().unwrap_or(&num_font_name).trim(), num_fh, num_no_aa);
+    draw_text_on(img, &num_font_name, font, "999", num_x, num_y - num_leading / 2, num_fh, num_col, None, None, num_no_aa, sess);
 }
 
 // ---------------------------------------------------------------------------
