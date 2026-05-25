@@ -20,19 +20,6 @@
 ```
 （任意のフォルダ）/
 ├── balloon_editor.exe        ← 実行ファイル
-├── assets/
-│   └── （素材フォルダ名）/  ← 素材フォルダはここに置く
-│       ├── files.txt        ← 画像合成定義（レイヤ色変え機能を使わない場合は不要）
-│       ├── descript.txt
-│       ├── install.txt
-│       ├── readme.txt
-│       ├── balloonc0.png ～ balloonc4.png
-│       ├── balloonk0.png（以降 k1, k2... と任意枚数）
-│       ├── balloons0.png（以降 s1, s2... と任意枚数）
-│       ├── arrow0.png, arrow1.png
-│       ├── online0.png（以降 online1, online2... と任意枚数）
-│       ├── sstp.png
-│       └── marker.png
 ├── output/                   ← 出力先（自動生成）
 │   └── （出力物フォルダ名）/
 ├── state.json                ← 作業状態の自動保存（自動生成）
@@ -42,7 +29,7 @@
 └── MANUAL.md                 ← 操作マニュアル
 ```
 
-素材フォルダを `assets/` 以下に置くと、ツールバー上段のコンボボックスへ自動的に一覧表示されます。
+素材フォルダはPC上の任意の場所に置けます。メニューバーの「ファイル > 素材フォルダを選択…」からフォルダ選択ダイアログで指定します。
 
 詳しい使い方は [MANUAL.md](MANUAL.md) を参照してください。
 
