@@ -283,7 +283,10 @@ impl BalloonEditorApp {
     pub fn export(&mut self) {
         use crate::core::descript::parse_descript;
 
-        let Some(_ad) = self.state.asset_dir() else { return; };
+        let Some(_ad) = self.state.asset_dir() else {
+            self.err("素材フォルダが選択されていません。\n\nメニュー「ファイル > 素材フォルダを選択…」から素材フォルダを指定してください。".to_string());
+            return;
+        };
 
         // 必須項目チェック
         let balloon_name = self.state.basic_info.get("name").map(|s| s.trim().to_string()).unwrap_or_default();
