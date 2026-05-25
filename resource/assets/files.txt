@@ -17,8 +17,7 @@ balloonk2,k2_edge.png:edge,k2_base.png:base
 // balloonk1, balloonk3 は記述なし → balloonk0/k2 を左右反転して自動生成
 
 balloonp2def0,k0_edge.png:edge,k0_base.png:base
-balloonp2def2,k2_edge.png:edge,k2_base.png:base
 // 例としてk*の画像を流用
-// balloonp2def1, balloonp2def3 は記述なし → balloonp2def0/p2def2 を左右反転して自動生成
+// balloonp2def1は記述なし → balloonp2def0を左右反転して自動生成
 
 
