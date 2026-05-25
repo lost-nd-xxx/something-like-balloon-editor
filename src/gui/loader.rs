@@ -224,6 +224,60 @@ pub fn ensure_balloon_cached(state: &mut AppState, asset_dir: &Path) -> anyhow::
     Ok(())
 }
 
+/// 出力用に全バルーンを個別色を考慮して合成して返す。
+/// individual_colors が設定されているバルーンはそれぞれ個別色で合成する。
+pub fn build_all_balloons_for_export(
+    state: &AppState,
+    asset_dir: &Path,
+) -> anyhow::Result<HashMap<String, image::RgbaImage>> {
+    let mut result: HashMap<String, image::RgbaImage> = HashMap::new();
+
+    if state.direct_image_mode {
+        // 画像編集なしモード: 元ファイルをそのまま使う
+        for name in &state.preview_balloons {
+            let stem = name.trim_end_matches(".png");
+            let path = asset_dir.join(name);
+            let img = if path.exists() {
+                image::open(&path)?.to_rgba8()
+            } else {
+                let even = even_name_of(stem);
+                let even_path = asset_dir.join(format!("{}.png", even));
+                if even_path.exists() {
+                    crate::core::composer::flip_horizontal(&image::open(&even_path)?.to_rgba8())
+                } else {
+                    continue;
+                }
+            };
+            result.insert(name.clone(), img);
+        }
+    } else {
+        let layout = &state.balloon_layout;
+        for name in &state.preview_balloons {
+            let stem = name.trim_end_matches(".png");
+            // 個別色があればそちらを優先、なければ共通色
+            let cs = state.color_set_for(Some(stem));
+            let even_stem = even_name_of(stem);
+            let needs_flip = even_stem != stem && !layout.contains_key(stem);
+
+            let img = if needs_flip {
+                if let Some(layers) = layout.get(&even_stem) {
+                    let even_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
+                    crate::core::composer::flip_horizontal(&even_img)
+                } else {
+                    continue;
+                }
+            } else if let Some(layers) = layout.get(stem) {
+                crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?
+            } else {
+                continue;
+            };
+            result.insert(name.clone(), img);
+        }
+    }
+
+    Ok(result)
+}
+
 /// asset_dir からパーツファイル（arrow*, marker*, online*, sstp*, clickwait*, ok_*, cancel_*, mode_*）を収集する
 fn collect_part_files(asset_dir: &Path) -> Vec<PathBuf> {
     let patterns = [

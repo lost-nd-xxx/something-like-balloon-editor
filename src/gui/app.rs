@@ -6,7 +6,7 @@ use image::RgbaImage;
 use crate::gui::{
     loader::{load_asset_folder, load_asset_folder_keep_texts,
              rebuild_balloon_cache, rebuild_selected_balloon, ensure_balloon_cached,
-             rebuild_dynamic_defaults},
+             rebuild_dynamic_defaults, build_all_balloons_for_export},
     panels::{self},
     state::AppState,
 };
@@ -340,8 +340,16 @@ impl BalloonEditorApp {
             return;
         }
 
-        // バルーン画像を出力
-        for (name, img) in &self.state.balloon_cache {
+        // バルーン画像を出力（個別色を考慮して全件合成）
+        let ad = self.state.asset_dir().unwrap();
+        let balloon_images = match build_all_balloons_for_export(&self.state, &ad) {
+            Ok(imgs) => imgs,
+            Err(e) => {
+                self.err(format!("バルーン画像の合成に失敗しました:\n{}", e));
+                return;
+            }
+        };
+        for (name, img) in &balloon_images {
             let path = output_dir.join(name);
             if let Err(e) = img.save(&path) {
                 self.err(format!("{} の保存に失敗しました:\n{}", name, e));

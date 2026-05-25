@@ -65,6 +65,11 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                     .unwrap_or(crate::core::color::Rgb(29, 106, 184));
                 app.state.parts_colors.clear();
                 app.state.parts_colors.insert("all".to_string(), default_parts);
+                // 個別色・個別テキスト設定もリセット
+                app.state.individual_colors.clear();
+                app.state.individual_texts.clear();
+                // 編集中バッファを破棄（残っていると再読み込み後に書き戻されるため）
+                app.state.editing_buf = None;
                 app.state.basic_info.clear();
                 app.reload_asset_folder(ctx);
             }
