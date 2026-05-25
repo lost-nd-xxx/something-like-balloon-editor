@@ -161,21 +161,25 @@ fn handle_drag_edit(
         None
     };
 
-    // カーソル設定
-    let cursor = match &target {
-        DragEditTarget::ValidRect | DragEditTarget::CommunicateBox => {
-            let edge = app.state.drag_state.as_ref()
-                .and_then(|ds| ds.active_edge)
-                .or(hovered_edge);
-            match edge {
-                Some(RectEdge::Top) | Some(RectEdge::Bottom) => egui::CursorIcon::ResizeVertical,
-                Some(RectEdge::Left) | Some(RectEdge::Right)  => egui::CursorIcon::ResizeHorizontal,
-                None => egui::CursorIcon::Default,
+    // カーソル設定: プレビュー領域内にいる場合、またはドラッグ中のみ変更する
+    let is_in_img = pointer_pos.map(|p| img_rect.contains(p)).unwrap_or(false);
+    let is_dragging = app.state.drag_state.is_some();
+    if is_in_img || is_dragging {
+        let cursor = match &target {
+            DragEditTarget::ValidRect | DragEditTarget::CommunicateBox => {
+                let edge = app.state.drag_state.as_ref()
+                    .and_then(|ds| ds.active_edge)
+                    .or(hovered_edge);
+                match edge {
+                    Some(RectEdge::Top) | Some(RectEdge::Bottom) => egui::CursorIcon::ResizeVertical,
+                    Some(RectEdge::Left) | Some(RectEdge::Right)  => egui::CursorIcon::ResizeHorizontal,
+                    None => egui::CursorIcon::Default,
+                }
             }
-        }
-        _ => egui::CursorIcon::Crosshair,
-    };
-    ui.ctx().set_cursor_icon(cursor);
+            _ => egui::CursorIcon::Crosshair,
+        };
+        ui.ctx().set_cursor_icon(cursor);
+    }
 
     // ドラッグ開始
     if interact.drag_started() {
@@ -184,16 +188,43 @@ fn handle_drag_edit(
             let start_img = egui::pos2(img_pos.x, img_pos.y);
 
             // ValidRect/CommunicateBox: 辺を検出して start_val をその辺の現在値にセット
-            let (start_val, active_edge) = if matches!(target,
+            // start_img も辺の座標に揃えることで、ドラッグ開始直後の dx=0 が
+            // 正しく「辺の現在座標」を指すようにする
+            let (start_val, start_img, active_edge) = if matches!(target,
                 DragEditTarget::ValidRect | DragEditTarget::CommunicateBox)
             {
                 let edge = detect_edge(&target, &parsed, &merged_defaults,
                                        iw, ih, start_img, 8.0);
-                let val = edge.map(|e| edge_current_val(e, &parsed, &merged_defaults, iw, ih))
-                    .unwrap_or((0, 0));
-                (val, edge)
+                let val = match edge {
+                    Some(e @ (RectEdge::Left | RectEdge::Right)) => {
+                        let v = if matches!(target, DragEditTarget::CommunicateBox) {
+                            cb_edge_current_val(e, &parsed, ih)
+                        } else {
+                            edge_current_val(e, &parsed, &merged_defaults, iw, ih)
+                        };
+                        v
+                    }
+                    Some(e @ (RectEdge::Top | RectEdge::Bottom)) => {
+                        let v = if matches!(target, DragEditTarget::CommunicateBox) {
+                            cb_edge_current_val(e, &parsed, ih)
+                        } else {
+                            edge_current_val(e, &parsed, &merged_defaults, iw, ih)
+                        };
+                        v
+                    }
+                    None => (0, 0),
+                };
+                // start_img を辺の座標に合わせる（x軸辺ならx成分、y軸辺ならy成分を揃える）
+                let aligned_start_img = match edge {
+                    Some(RectEdge::Left) | Some(RectEdge::Right)
+                        => egui::pos2(val.0 as f32, start_img.y),
+                    Some(RectEdge::Top) | Some(RectEdge::Bottom)
+                        => egui::pos2(start_img.x, val.1 as f32),
+                    None => start_img,
+                };
+                (val, aligned_start_img, edge)
             } else {
-                (info.current_val, None)
+                (info.current_val, start_img, None)
             };
 
             // 辺が検出できなかった場合はドラッグ開始しない
@@ -225,10 +256,12 @@ fn handle_drag_edit(
         }
     }
 
-    // ドラッグ終了 → descript に書き込んでプレビュー再生成
+    // ドラッグ終了 → クランプ補正してから descript に書き込みプレビュー再生成
     if interact.drag_stopped() {
         if let Some(ds) = app.state.drag_state.take() {
-            let new_text = write_val_to_descript(&target, &descript_text, ds.current_val,
+            let clamped = clamp_val(&target, ds.current_val, ds.active_edge,
+                                    &descript_text, iw, ih, parts);
+            let new_text = write_val_to_descript(&target, &descript_text, clamped,
                                                   ds.active_edge, ds.was_negative, iw, ih);
             app.state.descript_text = new_text;
             app.refresh_preview_texture(ctx);
@@ -400,6 +433,108 @@ fn compute_new_val_with_edge(
                 Some(RectEdge::Left) | Some(RectEdge::Right)  => (start.0 + dx, start.1),
                 Some(RectEdge::Top)  | Some(RectEdge::Bottom) => (start.0, start.1 + dy),
                 None => start,
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// クランプ補正（ドラッグ終了時）
+// ---------------------------------------------------------------------------
+
+/// ドラッグ終了時に値を画像範囲内にクランプする。
+/// パーツ画像がある場合はパーツが完全に収まる範囲（右端 = iw - パーツ幅）にクランプする。
+fn clamp_val(
+    target: &DragEditTarget,
+    val: (i32, i32),
+    edge: Option<RectEdge>,
+    descript_text: &str,
+    iw: i32,
+    ih: i32,
+    parts: &std::collections::HashMap<String, RgbaImage>,
+) -> (i32, i32) {
+    let (vx, vy) = val;
+
+    match target {
+        // 自由ドラッグ系: パーツが完全に収まる範囲にクランプ
+        DragEditTarget::Arrow0 => {
+            let (pw, ph) = parts.get("arrow0.png").map(|p| (p.width() as i32, p.height() as i32)).unwrap_or((0, 0));
+            (vx.clamp(0, (iw - pw).max(0)), vy.clamp(0, (ih - ph).max(0)))
+        }
+        DragEditTarget::Arrow1 => {
+            let (pw, ph) = parts.get("arrow1.png").map(|p| (p.width() as i32, p.height() as i32)).unwrap_or((0, 0));
+            (vx.clamp(0, (iw - pw).max(0)), vy.clamp(0, (ih - ph).max(0)))
+        }
+        DragEditTarget::ClickWait => {
+            let (pw, ph) = parts.get("clickwait.png").map(|p| (p.width() as i32, p.height() as i32)).unwrap_or((0, 0));
+            (vx.clamp(0, (iw - pw).max(0)), vy.clamp(0, (ih - ph).max(0)))
+        }
+        DragEditTarget::SstpMarker => {
+            let img = parts.get("sstp_new.png").or_else(|| parts.get("sstp.png"));
+            let (pw, ph) = img.map(|p| (p.width() as i32, p.height() as i32)).unwrap_or((0, 0));
+            (vx.clamp(0, (iw - pw).max(0)), vy.clamp(0, (ih - ph).max(0)))
+        }
+        DragEditTarget::OnlineMarker => {
+            let (pw, ph) = parts.get("online0.png").map(|p| (p.width() as i32, p.height() as i32)).unwrap_or((0, 0));
+            (vx.clamp(0, (iw - pw).max(0)), vy.clamp(0, (ih - ph).max(0)))
+        }
+        // テキスト系: 開始座標のみ画像内に収める（テキスト幅は可変なので左上座標だけクランプ）
+        DragEditTarget::SstpMessage => (vx.clamp(0, iw), vy.clamp(0, ih)),
+        DragEditTarget::Counter => (vx.clamp(0, iw), vy.clamp(0, ih)),
+        // WordWrap: x のみ [0, iw]
+        DragEditTarget::WordWrap => (vx.clamp(0, iw), vy),
+        // ValidRect: 各辺を [0, iw/ih] に収め、対辺との間隔を最低 MIN_GAP px 確保する
+        DragEditTarget::ValidRect => {
+            const MIN_GAP: i32 = 10;
+            let parsed = parse_descript(descript_text);
+            let fd = field_defaults();
+            let mut def = std::collections::HashMap::new();
+            for (k, v) in &fd { def.insert(k.to_string(), v.to_string()); }
+            let g = |k: &str| get_descript_val(k, &parsed, &def, iw, ih);
+            match edge {
+                Some(RectEdge::Left) => {
+                    let right = g("validrect.right");
+                    (vx.clamp(0, (right - MIN_GAP).max(0)), vy)
+                }
+                Some(RectEdge::Right) => {
+                    let left = g("validrect.left");
+                    (vx.clamp(left + MIN_GAP, iw), vy)
+                }
+                Some(RectEdge::Top) => {
+                    let bottom = g("validrect.bottom");
+                    (vx, vy.clamp(0, (bottom - MIN_GAP).max(0)))
+                }
+                Some(RectEdge::Bottom) => {
+                    let top = g("validrect.top");
+                    (vx, vy.clamp(top + MIN_GAP, ih))
+                }
+                None => val,
+            }
+        }
+        // CommunicateBox: 各辺を [0, iw/ih] に収め、対辺との間隔を最低 MIN_GAP px 確保する
+        DragEditTarget::CommunicateBox => {
+            const MIN_GAP: i32 = 10;
+            let parsed = parse_descript(descript_text);
+            let cb_x: i32 = parsed.get("communicatebox.x").and_then(|s| s.parse().ok()).unwrap_or(10);
+            let cb_y = pos_str(parsed.get("communicatebox.y").map(|s| s.as_str()).unwrap_or("10"), ih);
+            let cb_w: i32 = parsed.get("communicatebox.width").and_then(|s| s.parse().ok()).unwrap_or(100);
+            let cb_h: i32 = parsed.get("communicatebox.height").and_then(|s| s.parse().ok()).unwrap_or(30);
+            match edge {
+                Some(RectEdge::Left) => {
+                    let right = cb_x + cb_w;
+                    (vx.clamp(0, (right - MIN_GAP).max(0)), vy)
+                }
+                Some(RectEdge::Right) => {
+                    (vx.clamp(cb_x + MIN_GAP, iw), vy)
+                }
+                Some(RectEdge::Top) => {
+                    let bottom = cb_y + cb_h;
+                    (vx, vy.clamp(0, (bottom - MIN_GAP).max(0)))
+                }
+                Some(RectEdge::Bottom) => {
+                    (vx, vy.clamp(cb_y + MIN_GAP, ih))
+                }
+                None => val,
             }
         }
     }

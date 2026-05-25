@@ -56,8 +56,9 @@ impl Sess {
             };
             let text = clipped.as_str();
             if text.is_empty() { return true; }
-            let char_count = text.chars().count();
-            let bmp_w = (size_px * char_count as f32 * 1.2 + 4.0) as i32;
+            // 実際のテキスト幅を GDI で計測してからビットマップサイズを決める
+            let measured_w = sess.measure(text);
+            let bmp_w = (measured_w + 4.0) as i32;
             let bmp_h = (size_px * 1.5 + 4.0) as i32;
             if bmp_w == 0 || bmp_h == 0 { return true; }
             sess.ensure_bmp(bmp_w, bmp_h);
@@ -168,7 +169,7 @@ pub fn draw_preview(
 
     let parsed_font_ref = parsed_font.as_deref();
     if opts.is_balloonc {
-        draw_communicatebox(&mut img, &parsed, parts_cache, &opts.balloon_name, &font_name, parsed_font_ref, no_aa, &mut sess);
+        draw_communicatebox(&mut img, &parsed, parts_cache, &opts.balloon_name, &font_name, parsed_font_ref, &mut sess);
     } else {
         draw_parts(&mut img, &parsed, parts_cache, w, h, &font_name, parsed_font_ref, no_aa, &mut sess);
         draw_sample_text(&mut img, &parsed, &vr, parts_cache, opts.mode, &font_name, parsed_font_ref, no_aa, &mut sess);
@@ -618,7 +619,6 @@ fn draw_communicatebox(
     balloon_name: &str,
     font_name: &str,
     font: Option<&fontdue::Font>,
-    no_aa: bool,
     sess: &mut Sess,
 ) {
     let (iw, ih) = (img.width() as i32, img.height() as i32);
@@ -639,12 +639,19 @@ fn draw_communicatebox(
     let cb_fc = get_color(parsed, "communicatebox.font.color")
         .unwrap_or(Rgb(0, 0, 0));
 
+    // communicatebox.font.name があれば優先、なければ font.name にフォールバック
+    let cb_font_name = {
+        let v = parsed.get("communicatebox.font.name").map(|s| s.trim().to_string()).unwrap_or_default();
+        if v.is_empty() { font_name.to_string() } else { v }
+    };
+    let cb_no_aa = is_bitmap_font(&cb_font_name);
+
     // フォントサイズ（入力域の高さに合わせる）
     let font_h = (cb_h as f32 * 0.75).max(8.0);
 
     // GDI フォントの internal leading（字形上端より上の余白）を取得して垂直中央補正に使う
-    let gdi_font_name = font_name.split(',').next().unwrap_or(font_name).trim();
-    let leading = gdi_text::font_internal_leading(gdi_font_name, font_h, no_aa);
+    let gdi_font_name = cb_font_name.split(',').next().unwrap_or(&cb_font_name).trim();
+    let leading = gdi_text::font_internal_leading(gdi_font_name, font_h, cb_no_aa);
 
     // 垂直中央の text_y を計算するクロージャ（leading 補正込み）
     let center_y = |area_top: i32, area_h: i32| -> i32 {
@@ -692,25 +699,25 @@ fn draw_communicatebox(
         // modeボタン（画像があれば垂直中央に貼り上にAutoテキストを重ねる、なければフォールバック描画）
         if has_mode {
             paste_centered_y(img, "mode_up.png", bl);
-            let tw = measure_text(font_name, font, "Auto", font_h, no_aa, sess);
+            let tw = measure_text(&cb_font_name, font, "Auto", font_h, cb_no_aa, sess);
             let tx = bl + ((mode_w as f32 - tw) / 2.0) as i32;
             let ty = center_y(bt, cb_h);
-            draw_text_on(img, font_name, font, "Auto", tx, ty, font_h, cb_fc, None, None, no_aa, sess);
+            draw_text_on(img, &cb_font_name, font, "Auto", tx, ty, font_h, cb_fc, None, None, cb_no_aa, sess);
         } else {
-            draw_mode_pentagon(img, bl, bt, bl + mode_w, bb, cb_fc, font_name, font, font_h, leading, no_aa, sess);
+            draw_mode_pentagon(img, bl, bt, bl + mode_w, bb, cb_fc, &cb_font_name, font, font_h, leading, cb_no_aa, sess);
         }
 
         // cancelボタン
         if has_cancel {
             paste_centered_y(img, "cancel_up.png", br - cancel_w);
         } else {
-            draw_button_box(img, br - cancel_w, bt, br, bb, "×", cb_fc, font_name, font, font_h, leading, no_aa, sess);
+            draw_button_box(img, br - cancel_w, bt, br, bb, "×", cb_fc, &cb_font_name, font, font_h, leading, cb_no_aa, sess);
         }
 
         // 入力テキスト（modeボタンの右から）
         let text_x = input_left + 4;
         let text_y = center_y(bt, cb_h);
-        draw_text_on(img, font_name, font, "入力テキスト", text_x, text_y, font_h, cb_fc, None, None, no_aa, sess);
+        draw_text_on(img, &cb_font_name, font, "入力テキスト", text_x, text_y, font_h, cb_fc, None, None, cb_no_aa, sess);
     } else {
         // balloonc0-3: 右に OK + × ボタン
         let ok_w = if has_ok {
@@ -737,7 +744,7 @@ fn draw_communicatebox(
         if has_ok {
             paste_centered_y(img, "ok_up.png", ok_x);
         } else {
-            draw_button_box(img, ok_x, bt, ok_x + ok_w, bb, "OK", cb_fc, font_name, font, font_h, leading, no_aa, sess);
+            draw_button_box(img, ok_x, bt, ok_x + ok_w, bb, "OK", cb_fc, &cb_font_name, font, font_h, leading, cb_no_aa, sess);
         }
 
         // cancelボタン
@@ -745,13 +752,13 @@ fn draw_communicatebox(
         if has_cancel {
             paste_centered_y(img, "cancel_up.png", cancel_x);
         } else {
-            draw_button_box(img, cancel_x, bt, cancel_x + cancel_w, bb, "×", cb_fc, font_name, font, font_h, leading, no_aa, sess);
+            draw_button_box(img, cancel_x, bt, cancel_x + cancel_w, bb, "×", cb_fc, &cb_font_name, font, font_h, leading, cb_no_aa, sess);
         }
 
         // 入力テキスト
         let text_x = bl + 4;
         let text_y = center_y(bt, cb_h);
-        draw_text_on(img, font_name, font, "入力テキスト", text_x, text_y, font_h, cb_fc, None, None, no_aa, sess);
+        draw_text_on(img, &cb_font_name, font, "入力テキスト", text_x, text_y, font_h, cb_fc, None, None, cb_no_aa, sess);
     }
 }
 

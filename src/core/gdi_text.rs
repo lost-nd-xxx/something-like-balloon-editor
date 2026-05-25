@@ -242,8 +242,9 @@ fn draw_text_gdi_impl(
     let text = clipped.as_str();
     if text.is_empty() { return true; }
 
-    let char_count = text.chars().count();
-    let w = (size_px * char_count as f32 * 1.2 + 4.0) as i32;
+    // 実際のテキスト幅を GDI で計測してからビットマップサイズを決める
+    let measured_w = sess.measure(text);
+    let w = (measured_w + 4.0) as i32;
     let h = (size_px * 1.5 + 4.0) as i32;
     if w == 0 || h == 0 { return false; }
 
@@ -333,59 +334,84 @@ fn create_gdi_font(font_name: &str, size_px: f32, no_aa: bool) -> HFONT {
 #[cfg(windows)]
 unsafe fn create_hfont(name: &str, height: i32, quality: u8) -> HFONT {
     let wide = to_wide(name);
-    CreateFontW(
-        height, 0, 0, 0,
-        FW_NORMAL.0 as i32, 0, 0, 0,
-        DEFAULT_CHARSET.0 as u32,
-        OUT_TT_PRECIS.0 as u32,
-        CLIP_DEFAULT_PRECIS.0 as u32,
-        quality as u32,
-        (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
-        PCWSTR(wide.as_ptr()),
-    )
+    unsafe {
+        CreateFontW(
+            height, 0, 0, 0,
+            FW_NORMAL.0 as i32, 0, 0, 0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_TT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            quality as u32,
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            PCWSTR(wide.as_ptr()),
+        )
+    }
 }
 
 /// ＭＳ ゴシックを固定ピッチ・ノンアンチエイリアスで作成する
 #[cfg(windows)]
 unsafe fn create_hfont_ms_gothic(height: i32) -> HFONT {
     let wide = to_wide("ＭＳ ゴシック");
-    CreateFontW(
-        height, 0, 0, 0,
-        FW_NORMAL.0 as i32, 0, 0, 0,
-        DEFAULT_CHARSET.0 as u32,
-        OUT_TT_PRECIS.0 as u32,
-        CLIP_DEFAULT_PRECIS.0 as u32,
-        NONANTIALIASED_QUALITY.0 as u32,
-        (FIXED_PITCH.0 | FF_MODERN.0) as u32,
-        PCWSTR(wide.as_ptr()),
-    )
+    unsafe {
+        CreateFontW(
+            height, 0, 0, 0,
+            FW_NORMAL.0 as i32, 0, 0, 0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_TT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            NONANTIALIASED_QUALITY.0 as u32,
+            (FIXED_PITCH.0 | FF_MODERN.0) as u32,
+            PCWSTR(wide.as_ptr()),
+        )
+    }
 }
 
 /// HFONT の実際のフォントフェイス名を取得する
 #[cfg(windows)]
 unsafe fn get_hfont_face(hfont: &HFONT) -> String {
     use windows::Win32::Graphics::Gdi::GetTextFaceW;
-    let hdc = CreateCompatibleDC(None);
-    if hdc.is_invalid() { return String::new(); }
-    let prev = SelectObject(hdc, *hfont);
-    let mut buf = vec![0u16; 256];
-    let len = GetTextFaceW(hdc, Some(&mut buf)) as usize;
-    let _ = SelectObject(hdc, prev);
-    let _ = DeleteDC(hdc);
-    String::from_utf16_lossy(&buf[..len]).trim_end_matches('\0').to_string()
+    unsafe {
+        let hdc = CreateCompatibleDC(None);
+        if hdc.is_invalid() { return String::new(); }
+        let prev = SelectObject(hdc, *hfont);
+        let mut buf = vec![0u16; 256];
+        let len = GetTextFaceW(hdc, Some(&mut buf)) as usize;
+        let _ = SelectObject(hdc, prev);
+        let _ = DeleteDC(hdc);
+        String::from_utf16_lossy(&buf[..len]).trim_end_matches('\0').to_string()
+    }
 }
 
-/// 要求フォント名と実際のフォント名が「別物」かどうかを判定する。
-/// GDI は英語名↔日本語名の表記ゆれがあるため、単純な文字列比較ではなく
-/// 共通部分文字列の有無で判定する。
+/// 実際に選択されたフォント名が、要求したフォントではなく
+/// GDI のデフォルトフォールバック先かどうかを判定する。
+/// フォールバック先として知られているフォント名のリストで照合する。
 #[cfg(windows)]
 fn font_was_substituted(requested: &str, actual: &str) -> bool {
     if actual.is_empty() { return false; }
-    // 空白・大文字小文字を無視して比較
-    let req_key = requested.to_lowercase().replace(' ', "");
-    let act_key = actual.to_lowercase().replace(' ', "");
-    // actual が requested を含む、または requested が actual を含む → 同じフォントとみなす
-    !act_key.contains(&req_key) && !req_key.contains(&act_key)
+
+    // GDI がフォント未検出時に選択するフォールバック先
+    // （環境・OS バージョンによって異なる場合があるため網羅的にリスト）
+    const FALLBACK_FACES: &[&str] = &[
+        "System",
+        "MS Sans Serif",
+        "Arial",
+        "Segoe UI",
+        "ＭＳ Ｐゴシック",
+        "MS PGothic",
+        "ＭＳ Ｐ明朝",
+        "MS PMincho",
+        "MS UI Gothic",
+        "ＭＳ ＵＩ ゴシック",
+    ];
+
+    // requested 自体がフォールバック先リストに含まれる場合は誤判定しない
+    let req_lower = requested.to_lowercase();
+    let act_lower = actual.to_lowercase();
+    if FALLBACK_FACES.iter().any(|f| f.to_lowercase() == req_lower) {
+        return false;
+    }
+
+    FALLBACK_FACES.iter().any(|f| f.to_lowercase() == act_lower)
 }
 
 /// 32bpp トップダウン DIBSection を作成する。
@@ -410,7 +436,7 @@ unsafe fn create_dib_section(hdc: HDC, w: i32, h: i32, bits_ptr: &mut *mut u32) 
         bmiColors: [windows::Win32::Graphics::Gdi::RGBQUAD::default()],
     };
     let mut raw_bits: *mut std::ffi::c_void = std::ptr::null_mut();
-    let hbmp = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &mut raw_bits, None, 0).ok()?;
+    let hbmp = unsafe { CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &mut raw_bits, None, 0).ok()? };
     if hbmp.is_invalid() { return None; }
     *bits_ptr = raw_bits as *mut u32;
     Some(hbmp)
@@ -465,7 +491,6 @@ impl PrivateFontGuard {
         Self { paths }
     }
 
-    pub fn is_empty(&self) -> bool { self.paths.is_empty() }
 }
 
 #[cfg(windows)]
@@ -492,7 +517,6 @@ pub struct PrivateFontGuard;
 #[cfg(not(windows))]
 impl PrivateFontGuard {
     pub fn register_from_dir(_: &str, _: &std::path::Path) -> Self { Self }
-    pub fn is_empty(&self) -> bool { true }
 }
 
 fn blend_px(img: &mut RgbaImage, x: i32, y: i32, col: Rgb, alpha: u8) {
