@@ -1,0 +1,23 @@
+// 「//」を先頭に書いた行はコメント行、実際の動作では無視される
+// 記述方法は「バルーン種別,ファイル名:色種別,...」（奥側から順に）
+// 色種別: edge（縁取り色）/ base（塗り色）/ text（入力ボックスの題字色）/ none（塗り替えなし）
+
+balloonc0,c_edge.png:edge,c_base.png:base,c0_text.png:text
+balloonc1,c_edge.png:edge,c_base.png:base,c1_text.png:text
+balloonc2,c_edge.png:edge,c_base.png:base,c2_text.png:text
+balloonc3,c_edge.png:edge,c_base.png:base,c3_text.png:text
+balloonc4,c_edge.png:edge,c_base.png:base,c4_text.png:text
+
+balloons0,s0_edge.png:edge,s0_base.png:base
+balloons2,s2_edge.png:edge,s2_base.png:base
+// balloons1, balloons3 は記述なし → balloons0/s2 を左右反転して自動生成
+
+balloonk0,k0_edge.png:edge,k0_base.png:base
+balloonk2,k2_edge.png:edge,k2_base.png:base
+// balloonk1, balloonk3 は記述なし → balloonk0/k2 を左右反転して自動生成
+
+// balloonp2def0,k0_edge.png:edge,k0_base.png:base
+// 例としてk*の画像を流用
+// balloonp2def1は記述なし → balloonp2def0を左右反転して自動生成
+
+

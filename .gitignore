@@ -1,0 +1,14 @@
+# Claude Codeセッションデータ
+.claude/
+
+# レガシー
+_legacy/
+
+# ビルド成果物
+target/
+
+# デバッグ起動用バッチ
+debag_run.bat
+
+# リリース出力
+balloon_editor.zip
