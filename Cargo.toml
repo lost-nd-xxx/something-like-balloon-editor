@@ -1,6 +1,6 @@
 [package]
 name = "balloon_editor"
-version = "1.0.0"
+version = "0.9.0"
 edition = "2024"
 
 [dependencies]

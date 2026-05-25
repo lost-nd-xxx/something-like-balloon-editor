@@ -11,7 +11,7 @@ fn main() -> eframe::Result<()> {
     let initial_size = load_window_size().unwrap_or([1400.0, 720.0]);
 
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("バルーンエディタ")
+        .with_title(gui::state::APP_NAME)
         .with_inner_size(initial_size);
     if let Some(icon_data) = icon {
         viewport = viewport.with_icon(std::sync::Arc::new(icon_data));
@@ -22,7 +22,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "バルーンエディタ",
+        gui::state::APP_NAME,
         options,
         Box::new(|cc| Ok(Box::new(gui::app::BalloonEditorApp::new(cc)))),
     )

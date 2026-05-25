@@ -6,6 +6,7 @@ use crate::core::color::{ColorSet, Rgb};
 use crate::core::layout::LayerList;
 use egui;
 
+pub const APP_NAME: &str = "Something Like Balloon Editor";
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const APP_REPOSITORY_URL: &str =
     "https://github.com/lost-nd-xxx/something_like_balloon_editor/";

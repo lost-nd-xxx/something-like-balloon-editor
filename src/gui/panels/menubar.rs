@@ -183,7 +183,8 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
             if ui.button("バージョン情報").clicked() {
                 ui.close_menu();
                 app.dialog = Some(("バージョン情報".into(), format!(
-                    "バルーンエディタ  v{}\n\nライセンス: MIT License\n{}",
+                    "{}  v{}\n\nライセンス: MIT License\n{}",
+                    crate::gui::state::APP_NAME,
                     crate::gui::state::APP_VERSION,
                     crate::gui::state::APP_REPOSITORY_URL,
                 )));

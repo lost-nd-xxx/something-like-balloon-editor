@@ -435,8 +435,8 @@ impl eframe::App for BalloonEditorApp {
         // ウィンドウタイトルを素材フォルダ名に合わせて更新
         {
             let title = match self.state.asset_dir_name() {
-                Some(name) => format!("バルーンエディタ - {}", name),
-                None => "バルーンエディタ".to_string(),
+                Some(name) => format!("{} - {}", crate::gui::state::APP_NAME, name),
+                None => crate::gui::state::APP_NAME.to_string(),
             };
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
         }
