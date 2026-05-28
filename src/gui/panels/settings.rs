@@ -586,7 +586,7 @@ fn show_drag_entry_list(
                 let is_active = app.state.drag_edit_target.as_ref() == Some(&target);
                 ui.label(label);
                 if is_active {
-                    if ui.button(egui::RichText::new("✏ 編集終了").color(egui::Color32::from_rgb(255, 160, 50))).clicked() {
+                    if ui.button(egui::RichText::new("編集終了").color(egui::Color32::from_rgb(255, 160, 50))).clicked() {
                         app.state.drag_edit_target = None;
                         app.state.drag_state = None;
                     }
