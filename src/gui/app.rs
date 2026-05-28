@@ -1409,7 +1409,11 @@ fn apply_profile_to_state(state: &mut AppState, profile: &crate::core::profile::
 
     if !profile.asset_dir.is_empty() {
         let p = std::path::PathBuf::from(&profile.asset_dir);
-        if p.is_dir() {
+        // プロジェクトフォルダ以外は復元しない（旧「素材フォルダを選択」で保存されたパス対策）
+        let is_project = crate::core::project::get_projects_base_dir()
+            .map(|base| p.starts_with(&base))
+            .unwrap_or(false);
+        if p.is_dir() && is_project {
             state.selected_asset_dir = Some(p);
         }
     }
