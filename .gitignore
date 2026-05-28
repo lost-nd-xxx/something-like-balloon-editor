@@ -8,7 +8,7 @@ _legacy/
 target/
 
 # デバッグ起動用バッチ
-debag_run.bat
+debug_run.bat
 
 # リリース出力
 something-like-balloon-editor_v*.zip
