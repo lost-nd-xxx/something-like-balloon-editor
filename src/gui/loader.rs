@@ -11,6 +11,16 @@ use crate::core::{
 };
 use crate::gui::state::AppState;
 
+/// Windows の \\?\ UNC long-path プレフィックスを除去して通常パスを返す。
+fn strip_unc_prefix(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if s.starts_with(r"\\?\") {
+        PathBuf::from(&s[4..])
+    } else {
+        path.to_path_buf()
+    }
+}
+
 /// 素材フォルダを読み込んで AppState を更新する。
 /// エラーが発生した場合は Err を返す（呼び出し元がダイアログ表示する）。
 pub fn load_asset_folder(state: &mut AppState, _root: &Path) -> anyhow::Result<()> {
@@ -27,6 +37,13 @@ fn load_asset_folder_inner(state: &mut AppState, keep_texts: bool) -> anyhow::Re
         Some(p) => p,
         None => return Ok(()),
     };
+    // Windows の \\?\ UNC プレフィックスを除去して通常パスに正規化する
+    let asset_dir = strip_unc_prefix(&asset_dir);
+
+    // フォルダが存在しない場合は何もしない（新規作成直後などのタイミング差を吸収）
+    if !asset_dir.is_dir() {
+        return Ok(());
+    }
 
     // files.txt のパース（なければ画像編集なしモード）
     let layout = load_balloon_layout(&asset_dir)?;
@@ -120,6 +137,9 @@ fn load_asset_folder_inner(state: &mut AppState, keep_texts: bool) -> anyhow::Re
 
 /// バルーン画像キャッシュを再構築する
 pub fn rebuild_balloon_cache(state: &mut AppState, asset_dir: &Path) -> anyhow::Result<()> {
+    if !asset_dir.is_dir() {
+        return Ok(());
+    }
     if state.direct_image_mode {
         // 画像編集なしモード: balloon*.png をそのまま読む
         state.balloon_cache.clear();
@@ -165,7 +185,14 @@ pub fn rebuild_balloon_cache(state: &mut AppState, asset_dir: &Path) -> anyhow::
 /// 選択バルーンのみ合成してキャッシュを更新する（Undo/Redo 後の高速プレビュー用）。
 /// 他のバルーンのキャッシュはクリアし、選択時に遅延合成される。
 pub fn rebuild_selected_balloon(state: &mut AppState, asset_dir: &Path) -> anyhow::Result<()> {
+    if !asset_dir.is_dir() {
+        return Ok(());
+    }
     let selected = state.selected_balloon.clone();
+    // 選択バルーンが空（画像なしモードなど）は何もしない
+    if selected.is_empty() {
+        return Ok(());
+    }
     let selected_stem = selected.trim_end_matches(".png").to_string();
 
     // 他のバルーンのキャッシュはクリア（古い色のまま残らないように）
@@ -222,7 +249,14 @@ pub fn rebuild_selected_balloon(state: &mut AppState, asset_dir: &Path) -> anyho
 
 /// 指定バルーン名のキャッシュが無ければ合成して追加する（バルーン選択時の遅延合成）。
 pub fn ensure_balloon_cached(state: &mut AppState, asset_dir: &Path) -> anyhow::Result<()> {
+    if !asset_dir.is_dir() {
+        return Ok(());
+    }
     let selected = state.selected_balloon.clone();
+    // 選択バルーンが空（画像なしモードなど）は何もしない
+    if selected.is_empty() {
+        return Ok(());
+    }
     if state.balloon_cache.contains_key(&selected) {
         return Ok(());
     }
@@ -446,3 +480,104 @@ fn even_name_of(stem: &str) -> String {
     }
     stem.to_string()
 }
+
+/// 指定された画像ファイルが 24bit PNG（透過色なし）であるか判定します。
+pub fn is_24bit_png(path: &Path) -> bool {
+    if let Ok(dyn_img) = image::open(path) {
+        match dyn_img.color() {
+            image::ColorType::Rgba8 | image::ColorType::Rgba16 | image::ColorType::Rgba32F => false,
+            _ => true,
+        }
+    } else {
+        false
+    }
+}
+
+/// 選択された画像を物理的にプロジェクトフォルダへコピーします。
+/// 24bit PNGの隣に同名 .pna が存在する場合、.pna も追従コピーします。
+/// 競合（同名ファイル）が存在する場合、一時退避およびロールバックによる安全対策を行います。
+pub fn import_image_file_safe(
+    state: &AppState,
+    src_png_path: &Path,
+    target_filename: &str,
+) -> anyhow::Result<()> {
+    let asset_dir = state
+        .asset_dir()
+        .ok_or_else(|| anyhow::anyhow!("プロジェクトフォルダが選択されていません"))?;
+
+    let dest_png_path = asset_dir.join(target_filename);
+    let backup_png_path = dest_png_path.with_extension("png_backup");
+
+    // pna のパス（PNGの拡張子を pna に変えたもの）
+    let src_pna_path = src_png_path.with_extension("pna");
+    let has_pna = is_24bit_png(src_png_path) && src_pna_path.exists();
+
+    let dest_pna_path = dest_png_path.with_extension("pna");
+    let backup_pna_path = dest_pna_path.with_extension("pna_backup");
+
+    // 1. 既存競合ファイルの一時退避
+    let png_existed = dest_png_path.exists();
+    if png_existed {
+        if backup_png_path.exists() {
+            std::fs::remove_file(&backup_png_path)?;
+        }
+        std::fs::rename(&dest_png_path, &backup_png_path)?;
+    }
+
+    let pna_existed = dest_pna_path.exists();
+    if pna_existed {
+        if backup_pna_path.exists() {
+            std::fs::remove_file(&backup_pna_path)?;
+        }
+        std::fs::rename(&dest_pna_path, &backup_pna_path)?;
+    }
+
+    // 2. 物理コピーの実行
+    // 親ディレクトリの作成（念のため）
+    if let Some(parent) = dest_png_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // PNGのコピー
+    if let Err(e) = std::fs::copy(src_png_path, &dest_png_path) {
+        // エラー時はロールバック
+        rollback_import(&dest_png_path, png_existed, &backup_png_path)?;
+        rollback_import(&dest_pna_path, pna_existed, &backup_pna_path)?;
+        return Err(anyhow::anyhow!("PNGファイルのコピーに失敗しました: {}", e));
+    }
+
+    // PNAの追従コピー
+    if has_pna {
+        if let Err(e) = std::fs::copy(&src_pna_path, &dest_pna_path) {
+            // エラー時はロールバック
+            rollback_import(&dest_png_path, png_existed, &backup_png_path)?;
+            rollback_import(&dest_pna_path, pna_existed, &backup_pna_path)?;
+            return Err(anyhow::anyhow!("PNAファイルのコピーに失敗しました: {}", e));
+        }
+    }
+
+    // 3. コピー成功: 退避していたバックアップをクリーンアップ
+    if png_existed && backup_png_path.exists() {
+        let _ = std::fs::remove_file(&backup_png_path);
+    }
+    if pna_existed && backup_pna_path.exists() {
+        let _ = std::fs::remove_file(&backup_pna_path);
+    }
+
+    Ok(())
+}
+
+fn rollback_import(
+    dest_path: &Path,
+    existed: bool,
+    backup_path: &Path,
+) -> anyhow::Result<()> {
+    if dest_path.exists() {
+        let _ = std::fs::remove_file(dest_path);
+    }
+    if existed && backup_path.exists() {
+        std::fs::rename(backup_path, dest_path)?;
+    }
+    Ok(())
+}
+

@@ -6,19 +6,76 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
     egui::menu::bar(ui, |ui| {
         // ファイルメニュー
         ui.menu_button("ファイル", |ui| {
-            // 素材フォルダ選択
-            {
-                if ui.button("素材フォルダを選択…").clicked() {
-                    ui.close_menu();
-                    app.select_asset_folder_dialog(ctx);
+            if ui.button("新規プロジェクト…").clicked() {
+                ui.close_menu();
+                app.state.show_new_project_window = true;
+            }
+            if ui.button("プロジェクトを開く…").clicked() {
+                ui.close_menu();
+                app.state.open_project_list = crate::core::project::list_projects();
+                app.state.open_project_selected = None;
+                app.state.show_open_project_window = true;
+            }
+            if ui.button("フォルダからプロジェクトを作成…").clicked() {
+                ui.close_menu();
+                let picked = rfd::FileDialog::new()
+                    .set_title("取り込む素材フォルダを選択")
+                    .pick_folder();
+                if let Some(src) = picked {
+                    let folder_name = src.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    app.state.import_folder_src = src;
+                    app.state.import_folder_project_name = folder_name;
+                    app.state.import_folder_warning = String::new();
+                    app.state.show_import_folder_window = true;
                 }
-                if ui.button("素材フォルダをエクスプローラで開く").clicked() {
+            }
+            ui.separator();
+            ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
+                if ui.button("上書き保存  (Ctrl+S)").clicked() {
+                    ui.close_menu();
+                    app.save_project();
+                }
+            });
+            ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
+                if ui.button("別名で保存…").clicked() {
+                    ui.close_menu();
+                    let current_name = app.state.asset_dir()
+                        .and_then(|d| d.file_name().map(|n| n.to_string_lossy().to_string()))
+                        .unwrap_or_default();
+                    app.state.save_as_project_name = current_name;
+                    app.state.save_as_project_warning = String::new();
+                    app.state.show_save_as_project_window = true;
+                }
+            });
+            ui.separator();
+            ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
+                if ui.button("画像をプロジェクトに追加…").clicked() {
+                    ui.close_menu();
+                    let picked = rfd::FileDialog::new()
+                        .set_title("インポートする画像を選択")
+                        .add_filter("PNG画像", &["png"])
+                        .pick_files();
+                    if let Some(files) = picked {
+                        if !files.is_empty() {
+                            app.state.import_queue = files;
+                            app.state.import_queue_index = 0;
+                            app.state.show_import_window = true;
+                            app.preset_import_from_current_queue();
+                        }
+                    }
+                }
+            });
+            ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
+                if ui.button("プロジェクトをエクスプローラで開く").clicked() {
                     ui.close_menu();
                     if let Some(path) = app.state.asset_dir() {
                         let _ = open::that(&path);
                     }
                 }
-            }
+            });
             ui.separator();
             if ui.button("プロファイルを保存…").clicked() {
                 ui.close_menu();
@@ -29,7 +86,7 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                 app.load_profile_dialog(ctx);
             }
             ui.separator();
-            if ui.button("出力  (Ctrl+E)").clicked() {
+            if ui.button("バルーンとして出力  (Ctrl+E)").clicked() {
                 ui.close_menu();
                 app.export();
             }

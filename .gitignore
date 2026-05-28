@@ -12,3 +12,6 @@ debug_run.bat
 
 # リリース出力
 something-like-balloon-editor_v*.zip
+
+# クラッシュダンプ
+*.stackdump

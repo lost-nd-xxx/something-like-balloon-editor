@@ -175,6 +175,54 @@ pub struct AppState {
     // --- 読み込み時警告 ---
     /// 素材フォルダ読み込み時に蓄積された警告メッセージ。呼び出し元がダイアログ表示後クリアする。
     pub load_warnings: Vec<String>,
+
+    // --- プロジェクト新規作成UI ---
+    pub show_new_project_window: bool,
+    pub new_project_name: String,
+    pub new_project_warning: String,
+
+    // --- プロジェクトを開くUI ---
+    pub show_open_project_window: bool,
+    /// projects/ 配下のプロジェクト名一覧（ダイアログ表示用）
+    pub open_project_list: Vec<String>,
+    /// 一覧の選択中インデックス（フィルタ後リスト上のインデックス）
+    pub open_project_selected: Option<usize>,
+    /// 絞り込みフィルタ文字列
+    pub open_project_filter: String,
+
+    // --- フォルダからプロジェクト作成UI ---
+    pub show_import_folder_window: bool,
+    /// インポート元フォルダパス
+    pub import_folder_src: std::path::PathBuf,
+    /// 作成するプロジェクト名（初期値 = ソースフォルダ名）
+    pub import_folder_project_name: String,
+    pub import_folder_warning: String,
+
+    // --- 別名で保存UI ---
+    pub show_save_as_project_window: bool,
+    pub save_as_project_name: String,
+    pub save_as_project_warning: String,
+
+    // --- 画像インポートUI（キュー対応） ---
+    pub show_import_window: bool,
+    pub import_queue: Vec<std::path::PathBuf>,
+    pub import_queue_index: usize,
+    pub import_category: String,
+    pub import_is_scope_specific: bool,
+    pub import_scope_num: i32,
+    /// 汎用ID（balloon/online のID番号など）
+    pub import_target_id_num: u32,
+    /// 矢印の向き: 0=上, 1=下
+    pub import_arrow_dir: u8,
+    /// 入力ボックス (balloonc) のID: 0〜4
+    pub import_balloonc_id: usize,
+    /// inputbtn カテゴリのボタン種別: "ok" / "cancel" / "mode"
+    pub import_inputbtn_kind: String,
+    /// inputbtn カテゴリのボタン状態: "up" / "down"
+    pub import_inputbtn_state: String,
+    pub import_custom_filename: String,
+    /// D&Dファイルに同名 .pna が存在するか（情報表示用）
+    pub import_has_pna: bool,
 }
 
 /// テキスト・数値入力の編集中バッファ
@@ -239,6 +287,43 @@ impl AppState {
             drag_edit_target:  None,
             drag_state:        None,
             load_warnings:     Vec::new(),
+
+            // --- プロジェクト新規作成UI ---
+            show_new_project_window: false,
+            new_project_name: String::new(),
+            new_project_warning: String::new(),
+
+            // --- プロジェクトを開くUI ---
+            show_open_project_window: false,
+            open_project_list: Vec::new(),
+            open_project_selected: None,
+            open_project_filter: String::new(),
+
+            // --- フォルダからプロジェクト作成UI ---
+            show_import_folder_window: false,
+            import_folder_src: std::path::PathBuf::new(),
+            import_folder_project_name: String::new(),
+            import_folder_warning: String::new(),
+
+            // --- 別名で保存UI ---
+            show_save_as_project_window: false,
+            save_as_project_name: String::new(),
+            save_as_project_warning: String::new(),
+
+            // --- 画像インポートUI（キュー対応） ---
+            show_import_window: false,
+            import_queue: Vec::new(),
+            import_queue_index: 0,
+            import_category: "balloon".to_string(),
+            import_is_scope_specific: true,
+            import_scope_num: 0,
+            import_target_id_num: 0,
+            import_arrow_dir: 0,
+            import_balloonc_id: 0,
+            import_inputbtn_kind: "ok".to_string(),
+            import_inputbtn_state: "up".to_string(),
+            import_custom_filename: String::new(),
+            import_has_pna: false,
         }
     }
 
@@ -250,7 +335,32 @@ impl AppState {
 
     /// 選択中の素材フォルダの絶対パスを返す
     pub fn asset_dir(&self) -> Option<PathBuf> {
-        self.selected_asset_dir.clone()
+        self.selected_asset_dir.as_ref().map(|p| {
+            // Windows の \\?\ UNC long-path プレフィックスを除去して通常パスを返す
+            let s = p.to_string_lossy();
+            if s.starts_with(r"\\?\") {
+                std::path::PathBuf::from(&s[4..])
+            } else {
+                p.clone()
+            }
+        })
+    }
+
+    /// 選択中の素材フォルダが projects/ 配下のプロジェクトかどうかを返す。
+    /// projects/ 配下でない場合（外部素材フォルダ読み込み）はインポート不可。
+    pub fn is_project_dir(&self) -> bool {
+        let Some(asset_dir) = self.asset_dir() else { return false; };
+        let Ok(base) = crate::core::project::get_projects_base_dir() else { return false; };
+        asset_dir.starts_with(&base)
+    }
+
+    /// descript.txt 内の "directory"（インストール先フォルダ名）を取得します。
+    pub fn get_install_directory_name(&self) -> Option<String> {
+        if self.descript_text.is_empty() {
+            return None;
+        }
+        let parsed = crate::core::descript::parse_descript(&self.descript_text);
+        parsed.get("directory").cloned()
     }
 
     /// 素材フォルダの表示名（フォルダ名部分のみ）を返す

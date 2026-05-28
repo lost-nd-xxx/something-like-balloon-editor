@@ -159,6 +159,10 @@ pub fn parse_balloon_layout(
 /// asset_dir/files.txt を読んでパース結果を返す。
 /// files.txt が存在しない場合は空の HashMap を返す（画像編集なしモード）。
 pub fn load_balloon_layout(asset_dir: &Path) -> anyhow::Result<HashMap<String, LayerList>> {
+    // フォルダ自体が存在しない場合は空レイアウトを返す
+    if !asset_dir.is_dir() {
+        return Ok(HashMap::new());
+    }
     let files_txt = asset_dir.join("files.txt");
     if !files_txt.exists() {
         return Ok(HashMap::new());
