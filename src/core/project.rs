@@ -31,6 +31,19 @@ pub fn get_project_dir(name: &str) -> anyhow::Result<PathBuf> {
     Ok(base.join(name))
 }
 
+/// projects/ 配下のプロジェクト名一覧をソートして返します。
+pub fn list_projects() -> Vec<String> {
+    let Ok(base) = get_projects_base_dir() else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(&base) else { return Vec::new() };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    names.sort();
+    names
+}
+
 /// 指定された名前のプロジェクトフォルダが既に存在するか判定します。
 pub fn project_exists(name: &str) -> bool {
     if let Ok(dir) = get_project_dir(name) {

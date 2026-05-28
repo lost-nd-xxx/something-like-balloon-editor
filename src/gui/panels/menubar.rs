@@ -10,6 +10,12 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                 ui.close_menu();
                 app.state.show_new_project_window = true;
             }
+            if ui.button("プロジェクトを開く…").clicked() {
+                ui.close_menu();
+                app.state.open_project_list = crate::core::project::list_projects();
+                app.state.open_project_selected = None;
+                app.state.show_open_project_window = true;
+            }
             if ui.button("フォルダからプロジェクトを作成…").clicked() {
                 ui.close_menu();
                 let picked = rfd::FileDialog::new()
@@ -26,6 +32,25 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                     app.state.show_import_folder_window = true;
                 }
             }
+            ui.separator();
+            ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
+                if ui.button("上書き保存  (Ctrl+S)").clicked() {
+                    ui.close_menu();
+                    app.save_project();
+                }
+            });
+            ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
+                if ui.button("別名で保存…").clicked() {
+                    ui.close_menu();
+                    let current_name = app.state.asset_dir()
+                        .and_then(|d| d.file_name().map(|n| n.to_string_lossy().to_string()))
+                        .unwrap_or_default();
+                    app.state.save_as_project_name = current_name;
+                    app.state.save_as_project_warning = String::new();
+                    app.state.show_save_as_project_window = true;
+                }
+            });
+            ui.separator();
             ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
                 if ui.button("画像をプロジェクトに追加…").clicked() {
                     ui.close_menu();
@@ -43,20 +68,14 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                     }
                 }
             });
-            ui.separator();
-            // 素材フォルダ選択
-            {
-                if ui.button("素材フォルダを選択…").clicked() {
-                    ui.close_menu();
-                    app.select_asset_folder_dialog(ctx);
-                }
-                if ui.button("素材フォルダをエクスプローラで開く").clicked() {
+            ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
+                if ui.button("プロジェクトをエクスプローラで開く").clicked() {
                     ui.close_menu();
                     if let Some(path) = app.state.asset_dir() {
                         let _ = open::that(&path);
                     }
                 }
-            }
+            });
             ui.separator();
             if ui.button("プロファイルを保存…").clicked() {
                 ui.close_menu();
@@ -67,7 +86,7 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                 app.load_profile_dialog(ctx);
             }
             ui.separator();
-            if ui.button("出力  (Ctrl+E)").clicked() {
+            if ui.button("バルーンとして出力  (Ctrl+E)").clicked() {
                 ui.close_menu();
                 app.export();
             }

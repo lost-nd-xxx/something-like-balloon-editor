@@ -181,6 +181,15 @@ pub struct AppState {
     pub new_project_name: String,
     pub new_project_warning: String,
 
+    // --- プロジェクトを開くUI ---
+    pub show_open_project_window: bool,
+    /// projects/ 配下のプロジェクト名一覧（ダイアログ表示用）
+    pub open_project_list: Vec<String>,
+    /// 一覧の選択中インデックス（フィルタ後リスト上のインデックス）
+    pub open_project_selected: Option<usize>,
+    /// 絞り込みフィルタ文字列
+    pub open_project_filter: String,
+
     // --- フォルダからプロジェクト作成UI ---
     pub show_import_folder_window: bool,
     /// インポート元フォルダパス
@@ -188,6 +197,11 @@ pub struct AppState {
     /// 作成するプロジェクト名（初期値 = ソースフォルダ名）
     pub import_folder_project_name: String,
     pub import_folder_warning: String,
+
+    // --- 別名で保存UI ---
+    pub show_save_as_project_window: bool,
+    pub save_as_project_name: String,
+    pub save_as_project_warning: String,
 
     // --- 画像インポートUI（キュー対応） ---
     pub show_import_window: bool,
@@ -279,11 +293,22 @@ impl AppState {
             new_project_name: String::new(),
             new_project_warning: String::new(),
 
+            // --- プロジェクトを開くUI ---
+            show_open_project_window: false,
+            open_project_list: Vec::new(),
+            open_project_selected: None,
+            open_project_filter: String::new(),
+
             // --- フォルダからプロジェクト作成UI ---
             show_import_folder_window: false,
             import_folder_src: std::path::PathBuf::new(),
             import_folder_project_name: String::new(),
             import_folder_warning: String::new(),
+
+            // --- 別名で保存UI ---
+            show_save_as_project_window: false,
+            save_as_project_name: String::new(),
+            save_as_project_warning: String::new(),
 
             // --- 画像インポートUI（キュー対応） ---
             show_import_window: false,

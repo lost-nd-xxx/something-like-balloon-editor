@@ -175,25 +175,22 @@ impl BalloonEditorApp {
         self.dialog = Some(("エラー".into(), msg.into()));
     }
 
-    /// 素材フォルダをダイアログで選択して読み込む
-    pub fn select_asset_folder_dialog(&mut self, ctx: &Context) {
-        let start_dir = self.state.selected_asset_dir.clone()
-            .unwrap_or_else(|| self.root.clone());
-        let picked = rfd::FileDialog::new()
-            .set_title("素材フォルダを選択")
-            .set_directory(&start_dir)
-            .pick_folder();
-        if let Some(path) = picked {
-            self.state.selected_asset_dir = Some(path);
-            self.reload_asset_folder(ctx);
-        }
-    }
-
     pub fn reload_asset_folder(&mut self, ctx: &Context) {
         // 素材フォルダを切り替えたとき基本情報もリセットする
         self.state.basic_info.clear();
         match load_asset_folder(&mut self.state, &self.root.clone()) {
             Ok(_) => {
+                // プロジェクトフォルダなら profile.json があれば色設定を自動復元
+                // （テキスト類はフォルダから読んだものを優先するため上書きしない）
+                if self.state.is_project_dir() {
+                    if let Some(asset_dir) = self.state.asset_dir() {
+                        let profile_path = asset_dir.join("profile.json");
+                        if let Ok(profile) = crate::core::profile::load_profile(&profile_path) {
+                            apply_project_profile_to_state(&mut self.state, &profile);
+                        }
+                    }
+                }
+
                 // descript から基本情報を再構築
                 use crate::core::descript::parse_descript;
                 let parsed_d = parse_descript(&self.state.descript_text);
@@ -267,6 +264,62 @@ impl BalloonEditorApp {
     }
 
     /// プロファイルをファイルダイアログで保存する
+    /// プロジェクトに保存（descript.txt / install.txt の書き出し + profile.json の保存）
+    pub fn save_project(&mut self) {
+        let Some(asset_dir) = self.state.asset_dir() else {
+            self.err("プロジェクトが選択されていません。");
+            return;
+        };
+        if !self.state.is_project_dir() {
+            self.err("現在開いているフォルダはプロジェクトではありません。");
+            return;
+        }
+
+        // descript.txt / install.txt を書き出す
+        let descript_path = asset_dir.join("descript.txt");
+        let install_path  = asset_dir.join("install.txt");
+        if let Err(e) = std::fs::write(&descript_path, &self.state.descript_text) {
+            self.err(format!("descript.txt の保存に失敗しました:\n{}", e));
+            return;
+        }
+        if let Err(e) = std::fs::write(&install_path, &self.state.install_text) {
+            self.err(format!("install.txt の保存に失敗しました:\n{}", e));
+            return;
+        }
+
+        // profile.json を保存
+        let profile_path = asset_dir.join("profile.json");
+        let profile = build_profile_from_state(&self.state);
+        if let Err(e) = crate::core::profile::save_profile(&profile_path, &profile) {
+            self.err(format!("プロファイルの保存に失敗しました:\n{}", e));
+        }
+    }
+
+    /// 現在のプロジェクトを別名のプロジェクトとしてコピー保存する
+    pub fn save_project_as(&mut self, new_name: &str, ctx: &Context) {
+        let Some(asset_dir) = self.state.asset_dir() else {
+            self.err("プロジェクトが選択されていません。");
+            return;
+        };
+        if !self.state.is_project_dir() {
+            self.err("現在開いているフォルダはプロジェクトではありません。");
+            return;
+        }
+
+        // まず現在のプロジェクトを上書き保存してから別名コピー
+        self.save_project();
+
+        match crate::core::project::create_project_from_folder(&asset_dir, new_name) {
+            Ok(dir) => {
+                self.state.selected_asset_dir = Some(dir);
+                self.reload_asset_folder(ctx);
+            }
+            Err(e) => {
+                self.err(format!("別名で保存エラー: {}", e));
+            }
+        }
+    }
+
     pub fn save_profile_dialog(&mut self) {
         let path = rfd::FileDialog::new()
             .set_title("プロファイルを保存")
@@ -682,6 +735,94 @@ impl eframe::App for BalloonEditorApp {
         }
 
         // 新規プロジェクト作成モーダル
+        // プロジェクトを開くダイアログ
+        if self.state.show_open_project_window {
+            let mut close = false;
+            let mut open_name: Option<String> = None;
+
+            egui::Window::new("プロジェクトを開く")
+                .collapsible(false)
+                .resizable(false)
+                .fixed_size([300.0, 310.0])
+                .show(ctx, |ui| {
+                    if self.state.open_project_list.is_empty() {
+                        ui.label("プロジェクトがありません。");
+                        ui.label("「新規プロジェクト」または「フォルダからプロジェクトを作成」で作成してください。");
+                    } else {
+                        // フィルタ入力欄
+                        ui.horizontal(|ui| {
+                            ui.label("絞り込み:");
+                            let filter_res = ui.add(
+                                egui::TextEdit::singleline(&mut self.state.open_project_filter)
+                                    .desired_width(f32::INFINITY)
+                            );
+                            // フィルタが変わったら選択をリセット
+                            if filter_res.changed() {
+                                self.state.open_project_selected = None;
+                            }
+                        });
+                        ui.add_space(4.0);
+
+                        // フィルタ後リスト（大文字小文字無視）
+                        let filter_lower = self.state.open_project_filter.to_lowercase();
+                        let filtered: Vec<&String> = self.state.open_project_list.iter()
+                            .filter(|n| filter_lower.is_empty() || n.to_lowercase().contains(&filter_lower))
+                            .collect();
+
+                        egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            for (i, name) in filtered.iter().enumerate() {
+                                let selected = self.state.open_project_selected == Some(i);
+                                if ui.selectable_label(selected, *name).clicked() {
+                                    self.state.open_project_selected = Some(i);
+                                }
+                            }
+                        });
+
+                        // 件数表示
+                        ui.add_space(2.0);
+                        let total = self.state.open_project_list.len();
+                        let shown = filtered.len();
+                        if total != shown {
+                            ui.label(format!("{} / {} 件", shown, total));
+                        } else {
+                            ui.label(format!("{} 件", total));
+                        }
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let can_open = self.state.open_project_selected.is_some();
+                        if ui.add_enabled(can_open, egui::Button::new("開く")).clicked() {
+                            if let Some(idx) = self.state.open_project_selected {
+                                // フィルタ後リストから実際の名前を引く
+                                let filter_lower = self.state.open_project_filter.to_lowercase();
+                                let filtered_name = self.state.open_project_list.iter()
+                                    .filter(|n| filter_lower.is_empty() || n.to_lowercase().contains(&filter_lower))
+                                    .nth(idx)
+                                    .cloned();
+                                open_name = filtered_name;
+                            }
+                            close = true;
+                        }
+                        if ui.button("キャンセル").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+
+            if let Some(name) = open_name {
+                if let Ok(dir) = crate::core::project::get_project_dir(&name) {
+                    self.state.selected_asset_dir = Some(dir);
+                    self.reload_asset_folder(ctx);
+                }
+            }
+            if close {
+                self.state.show_open_project_window = false;
+                self.state.open_project_selected = None;
+                self.state.open_project_filter.clear();
+            }
+        }
+
         if self.state.show_new_project_window {
             let mut close = false;
             egui::Window::new("新規プロジェクト作成")
@@ -822,6 +963,71 @@ impl eframe::App for BalloonEditorApp {
                 self.state.show_import_folder_window = false;
                 self.state.import_folder_project_name.clear();
                 self.state.import_folder_warning.clear();
+            }
+        }
+
+        // 別名で保存ダイアログ
+        if self.state.show_save_as_project_window {
+            let mut close = false;
+            let current_name = self.state.asset_dir()
+                .and_then(|d| d.file_name().map(|n| n.to_string_lossy().to_string()))
+                .unwrap_or_default();
+
+            egui::Window::new("別名で保存")
+                .collapsible(false)
+                .resizable(false)
+                .fixed_size([380.0, 160.0])
+                .show(ctx, |ui| {
+                    ui.label(format!("現在のプロジェクト: {}", current_name));
+                    ui.add_space(6.0);
+                    ui.label("新しいプロジェクト名:");
+                    ui.text_edit_singleline(&mut self.state.save_as_project_name);
+
+                    let name_trimmed = self.state.save_as_project_name.trim().to_string();
+                    let already_exists = crate::core::project::project_exists(&name_trimmed);
+                    let is_same = name_trimmed == current_name;
+                    if name_trimmed.is_empty() || is_same {
+                        self.state.save_as_project_warning = String::new();
+                    } else if already_exists {
+                        self.state.save_as_project_warning = "[!] 既に存在するプロジェクト名です。上書きされます。".to_string();
+                    } else {
+                        self.state.save_as_project_warning = String::new();
+                    }
+
+                    if !self.state.save_as_project_warning.is_empty() {
+                        ui.colored_label(egui::Color32::from_rgb(220, 160, 0), &self.state.save_as_project_warning.clone());
+                    } else {
+                        ui.label("");
+                    }
+
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let can_save = !name_trimmed.is_empty() && !is_same;
+                        if ui.add_enabled(can_save, egui::Button::new("保存")).clicked() {
+                            let proceed = if already_exists {
+                                rfd::MessageDialog::new()
+                                    .set_title("上書き確認")
+                                    .set_description(format!("プロジェクト「{}」は既に存在します。\n上書きしますか？", name_trimmed))
+                                    .set_buttons(rfd::MessageButtons::YesNo)
+                                    .show() == rfd::MessageDialogResult::Yes
+                            } else {
+                                true
+                            };
+                            if proceed {
+                                let name = name_trimmed.clone();
+                                self.save_project_as(&name, ctx);
+                                close = true;
+                            }
+                        }
+                        if ui.button("キャンセル").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+            if close {
+                self.state.show_save_as_project_window = false;
+                self.state.save_as_project_name.clear();
+                self.state.save_as_project_warning.clear();
             }
         }
 
@@ -1085,15 +1291,17 @@ impl eframe::App for BalloonEditorApp {
 
         // キーボードショートカット（ctx.input のクロージャ外で ctx を使う処理を行う）
         #[derive(Default)]
-        struct Keys { export: bool, undo: bool, redo: bool, refresh: bool }
+        struct Keys { export: bool, save: bool, undo: bool, redo: bool, refresh: bool }
         let keys = ctx.input(|i| Keys {
             export:  i.key_pressed(egui::Key::E) && i.modifiers.ctrl,
+            save:    i.key_pressed(egui::Key::S) && i.modifiers.ctrl,
             undo:    i.key_pressed(egui::Key::Z) && i.modifiers.ctrl && !i.modifiers.shift,
             redo:    (i.key_pressed(egui::Key::Y) && i.modifiers.ctrl)
                   || (i.key_pressed(egui::Key::Z) && i.modifiers.ctrl && i.modifiers.shift),
             refresh: i.key_pressed(egui::Key::F5),
         });
         if keys.export  { self.export(); }
+        if keys.save && self.state.is_project_dir() { self.save_project(); }
         if keys.undo {
             if self.state.undo() { self.rebuild_selected_and_refresh(ctx); }
             else                 { self.refresh_preview_texture(ctx); }
@@ -1148,6 +1356,51 @@ impl eframe::App for BalloonEditorApp {
         let profile = build_profile_from_state(&self.state);
         let _ = crate::core::profile::save_profile(&state_path, &profile);
     }
+}
+
+/// Profile → AppState に色設定のみ適用する（プロジェクト読み込み時用）
+/// テキスト類・asset_dir はフォルダから読んだものを優先するため上書きしない
+fn apply_project_profile_to_state(state: &mut AppState, profile: &crate::core::profile::Profile) {
+    use crate::gui::state::LAYER_DEFS;
+
+    for &(key, _, default) in LAYER_DEFS {
+        let color = profile.layer_color(key, default);
+        state.layer_colors.insert(key.to_string(), color);
+    }
+
+    let default_parts = state.layer_colors.get("parts").copied()
+        .unwrap_or(crate::core::color::Rgb(29, 106, 184));
+    state.parts_colors = if profile.parts_colors.is_empty() {
+        let mut m = std::collections::HashMap::new();
+        m.insert("all".to_string(), default_parts);
+        m
+    } else {
+        profile.parts_colors.iter()
+            .map(|(k, &[r, g, b])| (k.clone(), crate::core::color::Rgb(r, g, b)))
+            .collect()
+    };
+
+    state.individual_colors = profile.individual_colors.iter()
+        .map(|(k, ic)| {
+            let indiv = crate::gui::state::IndivColors {
+                base:  ic.base.map(|[r,g,b]| crate::core::color::Rgb(r,g,b)),
+                edge:  ic.edge.map(|[r,g,b]| crate::core::color::Rgb(r,g,b)),
+                text:  ic.text.map(|[r,g,b]| crate::core::color::Rgb(r,g,b)),
+                parts_colors: ic.parts_colors.iter()
+                    .map(|(k, &[r,g,b])| (k.clone(), crate::core::color::Rgb(r,g,b)))
+                    .collect(),
+            };
+            (k.clone(), indiv)
+        })
+        .collect();
+
+    state.no_balloon_color = profile.no_balloon_color;
+    state.bulk_color_mode  = profile.bulk_color_mode;
+    state.selected_balloon = if !profile.selected_balloon.is_empty() {
+        profile.selected_balloon.clone()
+    } else {
+        state.selected_balloon.clone()
+    };
 }
 
 /// Profile → AppState に適用する
