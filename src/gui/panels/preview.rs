@@ -76,11 +76,7 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
             }
         }
         None => {
-            ui.allocate_ui(available, |ui| {
-                ui.centered_and_justified(|ui| {
-                    ui.label("素材フォルダを選択してください");
-                });
-            });
+            ui.allocate_space(available);
         }
     }
 

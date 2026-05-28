@@ -425,10 +425,237 @@ impl BalloonEditorApp {
         // 出力フォルダをエクスプローラーで開く
         let _ = open::that(&output_dir);
     }
+
+    /// インポートキュー内の現在インデックスにあるファイルからUI入力値を自動推測してプレセットします。
+    pub fn preset_import_from_current_queue(&mut self) {
+        let idx = self.state.import_queue_index;
+        if idx >= self.state.import_queue.len() {
+            return;
+        }
+        let path = &self.state.import_queue[idx].clone();
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+        let stem = path.file_stem().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+
+        // .pna 検出（情報表示用）
+        self.state.import_has_pna = path.with_extension("pna").exists();
+
+        // 命名パターンの自動解析・プレセット
+        if stem.starts_with("balloons") {
+            self.state.import_category = "balloon".to_string();
+            self.state.import_is_scope_specific = true;
+            self.state.import_scope_num = 0;
+            self.state.import_target_id_num = stem.strip_prefix("balloons").unwrap_or("0").parse().unwrap_or(0);
+        } else if stem.starts_with("balloonk") {
+            self.state.import_category = "balloon".to_string();
+            self.state.import_is_scope_specific = true;
+            self.state.import_scope_num = 1;
+            self.state.import_target_id_num = stem.strip_prefix("balloonk").unwrap_or("0").parse().unwrap_or(0);
+        } else if stem.starts_with("balloonc") {
+            self.state.import_category = "balloonc".to_string();
+            let id_str = stem.strip_prefix("balloonc").unwrap_or("0");
+            self.state.import_balloonc_id = id_str.parse().unwrap_or(0).min(4);
+        } else if stem.starts_with("balloonp") && stem.contains("def") {
+            self.state.import_category = "balloon".to_string();
+            self.state.import_is_scope_specific = true;
+            let parts: Vec<&str> = stem.splitn(2, "def").collect();
+            if parts.len() == 2 {
+                self.state.import_scope_num = parts[0].strip_prefix("balloonp").unwrap_or("2").parse().unwrap_or(2);
+                self.state.import_target_id_num = parts[1].parse().unwrap_or(0);
+            }
+        } else if stem.starts_with("arrows") {
+            self.state.import_category = "arrow".to_string();
+            self.state.import_is_scope_specific = true;
+            self.state.import_scope_num = 0;
+            self.state.import_arrow_dir = stem.strip_prefix("arrows").unwrap_or("0").parse().unwrap_or(0).min(1);
+        } else if stem.starts_with("arrowk") {
+            self.state.import_category = "arrow".to_string();
+            self.state.import_is_scope_specific = true;
+            self.state.import_scope_num = 1;
+            self.state.import_arrow_dir = stem.strip_prefix("arrowk").unwrap_or("0").parse().unwrap_or(0).min(1);
+        } else if stem.starts_with("arrowp") && stem.contains("def") {
+            self.state.import_category = "arrow".to_string();
+            self.state.import_is_scope_specific = true;
+            let parts: Vec<&str> = stem.splitn(2, "def").collect();
+            if parts.len() == 2 {
+                self.state.import_scope_num = parts[0].strip_prefix("arrowp").unwrap_or("2").parse().unwrap_or(2);
+                self.state.import_arrow_dir = parts[1].parse().unwrap_or(0).min(1);
+            }
+        } else if stem.starts_with("arrow") {
+            self.state.import_category = "arrow".to_string();
+            self.state.import_is_scope_specific = false;
+            self.state.import_arrow_dir = stem.strip_prefix("arrow").unwrap_or("0").parse().unwrap_or(0).min(1);
+        } else if stem.starts_with("clickwaits") {
+            self.state.import_category = "clickwait".to_string();
+            self.state.import_is_scope_specific = true;
+            self.state.import_scope_num = 0;
+        } else if stem.starts_with("clickwaitk") {
+            self.state.import_category = "clickwait".to_string();
+            self.state.import_is_scope_specific = true;
+            self.state.import_scope_num = 1;
+        } else if stem.starts_with("clickwaitp") && stem.contains("def") {
+            self.state.import_category = "clickwait".to_string();
+            self.state.import_is_scope_specific = true;
+            let parts: Vec<&str> = stem.splitn(2, "def").collect();
+            self.state.import_scope_num = parts[0].strip_prefix("clickwaitp").unwrap_or("2").parse().unwrap_or(2);
+        } else if stem == "clickwait" {
+            self.state.import_category = "clickwait".to_string();
+            self.state.import_is_scope_specific = false;
+        } else if stem.starts_with("markers") {
+            self.state.import_category = "marker".to_string();
+            self.state.import_is_scope_specific = true;
+            self.state.import_scope_num = 0;
+        } else if stem.starts_with("markerk") {
+            self.state.import_category = "marker".to_string();
+            self.state.import_is_scope_specific = true;
+            self.state.import_scope_num = 1;
+        } else if stem.starts_with("markerp") && stem.contains("def") {
+            self.state.import_category = "marker".to_string();
+            self.state.import_is_scope_specific = true;
+            let parts: Vec<&str> = stem.splitn(2, "def").collect();
+            self.state.import_scope_num = parts[0].strip_prefix("markerp").unwrap_or("2").parse().unwrap_or(2);
+        } else if stem == "marker" {
+            self.state.import_category = "marker".to_string();
+            self.state.import_is_scope_specific = false;
+        } else if stem == "sstp_new" {
+            self.state.import_category = "sstp".to_string();
+            self.state.import_is_scope_specific = true;
+            self.state.import_scope_num = 0;
+        } else if stem == "sstp_newk" {
+            self.state.import_category = "sstp".to_string();
+            self.state.import_is_scope_specific = true;
+            self.state.import_scope_num = 1;
+        } else if stem.starts_with("sstp_newp") && stem.ends_with("def") {
+            self.state.import_category = "sstp".to_string();
+            self.state.import_is_scope_specific = true;
+            let p_part = stem.strip_prefix("sstp_newp").unwrap_or("2").strip_suffix("def").unwrap_or("2");
+            self.state.import_scope_num = p_part.parse().unwrap_or(2);
+        } else if stem == "sstp" {
+            self.state.import_category = "sstp".to_string();
+            self.state.import_is_scope_specific = false;
+        } else if stem.starts_with("online") {
+            self.state.import_category = "online".to_string();
+            self.state.import_target_id_num = stem.strip_prefix("online").unwrap_or("0").parse().unwrap_or(0);
+        } else if stem == "thumbnail" {
+            self.state.import_category = "thumbnail".to_string();
+        } else if let Some(rest) = stem.strip_prefix("ok_") {
+            self.state.import_category = "inputbtn".to_string();
+            self.state.import_inputbtn_kind = "ok".to_string();
+            self.state.import_inputbtn_state = rest.to_string();
+        } else if let Some(rest) = stem.strip_prefix("cancel_") {
+            self.state.import_category = "inputbtn".to_string();
+            self.state.import_inputbtn_kind = "cancel".to_string();
+            self.state.import_inputbtn_state = rest.to_string();
+        } else if let Some(rest) = stem.strip_prefix("mode_") {
+            self.state.import_category = "inputbtn".to_string();
+            self.state.import_inputbtn_kind = "mode".to_string();
+            self.state.import_inputbtn_state = rest.to_string();
+        } else {
+            self.state.import_category = "free".to_string();
+            self.state.import_is_scope_specific = false;
+            self.state.import_custom_filename = filename.clone();
+            self.state.import_target_id_num = 0;
+        }
+    }
+
+    /// 各種UI入力パラメータから、最終保存用のファイル名を組み立てて返します。
+    pub fn get_import_target_filename(&self) -> String {
+        let cat = &self.state.import_category;
+        let is_spec = self.state.import_is_scope_specific;
+        let scope = self.state.import_scope_num;
+        let id = self.state.import_target_id_num;
+        let dir = self.state.import_arrow_dir;
+
+        match cat.as_str() {
+            "free" => self.state.import_custom_filename.clone(),
+            "thumbnail" => "thumbnail.png".to_string(),
+            "online" => format!("online{}.png", id),
+            "inputbtn" => format!("{}_{}.png",
+                self.state.import_inputbtn_kind,
+                self.state.import_inputbtn_state),
+            "balloon" => {
+                if scope == 0 {
+                    format!("balloons{}.png", id)
+                } else if scope == 1 {
+                    format!("balloonk{}.png", id)
+                } else {
+                    format!("balloonp{}def{}.png", scope, id)
+                }
+            }
+            "balloonc" => format!("balloonc{}.png", self.state.import_balloonc_id),
+            "arrow" => {
+                if !is_spec {
+                    format!("arrow{}.png", dir)
+                } else if scope == 0 {
+                    format!("arrows{}.png", dir)
+                } else if scope == 1 {
+                    format!("arrowk{}.png", dir)
+                } else {
+                    format!("arrowp{}def{}.png", scope, dir)
+                }
+            }
+            "clickwait" => {
+                if !is_spec {
+                    "clickwait.png".to_string()
+                } else if scope == 0 {
+                    "clickwaits.png".to_string()
+                } else if scope == 1 {
+                    "clickwaitk.png".to_string()
+                } else {
+                    format!("clickwaitp{}def.png", scope)
+                }
+            }
+            "marker" => {
+                if !is_spec {
+                    "marker.png".to_string()
+                } else if scope == 0 {
+                    "markers.png".to_string()
+                } else if scope == 1 {
+                    "markerk.png".to_string()
+                } else {
+                    format!("markerp{}def.png", scope)
+                }
+            }
+            "sstp" => {
+                if !is_spec {
+                    "sstp.png".to_string()
+                } else if scope == 0 {
+                    "sstp_new.png".to_string()
+                } else if scope == 1 {
+                    "sstp_newk.png".to_string()
+                } else {
+                    format!("sstp_newp{}def.png", scope)
+                }
+            }
+            _ => "unknown.png".to_string(),
+        }
+    }
 }
 
 impl eframe::App for BalloonEditorApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        // ドラッグ＆ドロップされたファイルの捕捉
+        let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
+        if !dropped_files.is_empty() {
+            let png_files: Vec<std::path::PathBuf> = dropped_files
+                .into_iter()
+                .filter_map(|f| f.path)
+                .filter(|p| p.extension().and_then(|e| e.to_str()).map(|s| s.to_lowercase()) == Some("png".to_string()))
+                .collect();
+            
+            if !png_files.is_empty() {
+                if self.state.asset_dir().is_none() {
+                    self.err("プロジェクトが選択されていません。\n先にプロジェクトを選択または作成してください。");
+                } else if !self.state.is_project_dir() {
+                    self.err("現在開いているフォルダはプロジェクトではありません。\n画像をインポートするには、先にプロジェクトを作成してください。");
+                } else {
+                    self.state.import_queue = png_files;
+                    self.state.import_queue_index = 0;
+                    self.state.show_import_window = true;
+                    self.preset_import_from_current_queue();
+                }
+            }
+        }
+
         // バックグラウンドのプレビュー生成結果を毎フレームチェック
         self.poll_preview_result(ctx);
 
@@ -439,6 +666,310 @@ impl eframe::App for BalloonEditorApp {
                 None => crate::gui::state::APP_NAME.to_string(),
             };
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        }
+
+        // ダイアログ
+        if let Some((title, msg)) = self.dialog.clone() {
+            egui::Window::new(title)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(&msg);
+                    if ui.button("OK").clicked() {
+                        self.dialog = None;
+                    }
+                });
+        }
+
+        // 新規プロジェクト作成モーダル
+        if self.state.show_new_project_window {
+            let mut close = false;
+            egui::Window::new("新規プロジェクト作成")
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label("新規プロジェクトの名前を入力してください。\n(プロジェクトフォルダが projects/ 配下に作成されます)");
+                    ui.add_space(4.0);
+
+                    let placeholder = self.state.get_install_directory_name()
+                        .unwrap_or_else(|| "new_balloon".to_string());
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("プロジェクト名:");
+                        let resp = ui.text_edit_singleline(&mut self.state.new_project_name);
+                        if self.state.new_project_name.is_empty() && resp.gained_focus() {
+                            self.state.new_project_name = placeholder.clone();
+                        }
+                    });
+
+                    let name_trimmed = self.state.new_project_name.trim().to_string();
+                    let exists = if !name_trimmed.is_empty() {
+                        crate::core::project::project_exists(&name_trimmed)
+                    } else {
+                        false
+                    };
+
+                    if exists {
+                        ui.colored_label(egui::Color32::from_rgb(220, 80, 80), "[!] 既に存在するプロジェクト名です。保存すると上書きされます。");
+                    }
+
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("作成").clicked() {
+                            if name_trimmed.is_empty() {
+                                self.state.new_project_warning = "プロジェクト名を入力してください。".to_string();
+                            } else {
+                                let proceed = if exists {
+                                    rfd::MessageDialog::new()
+                                        .set_title("上書き確認")
+                                        .set_description(format!("プロジェクト「{}」は既に存在します。\n既存データをバックアップ退避した上で上書き作成しますか？\n(失敗時は自動で復元されます)", name_trimmed))
+                                        .set_buttons(rfd::MessageButtons::YesNo)
+                                        .show() == rfd::MessageDialogResult::Yes
+                                } else {
+                                    true
+                                };
+
+                                if proceed {
+                                    match crate::core::project::create_project_safe(&name_trimmed) {
+                                        Ok(dir) => {
+                                            self.state.selected_asset_dir = Some(dir);
+                                            self.reload_asset_folder(ctx);
+                                            close = true;
+                                        }
+                                        Err(e) => {
+                                            self.err(format!("新規作成エラー: {}", e));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if ui.button("キャンセル").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+            if close {
+                self.state.show_new_project_window = false;
+                self.state.new_project_name.clear();
+            }
+        }
+
+        // 画像インポート設定ダイアログ
+        if self.state.show_import_window {
+            let idx = self.state.import_queue_index;
+            if idx >= self.state.import_queue.len() {
+                self.state.show_import_window = false;
+                self.state.import_queue.clear();
+                self.state.import_queue_index = 0;
+            } else {
+                let mut close = false;
+                let mut next = false;
+                let path = self.state.import_queue[idx].clone();
+                let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+                egui::Window::new("画像インポート設定")
+                    .collapsible(false)
+                    .resizable(false)
+                    .fixed_size([520.0, 360.0])
+                    .show(ctx, |ui| {
+                        ui.colored_label(egui::Color32::from_rgb(29, 106, 184), format!("インポート画像 ({} / {} 枚目):", idx + 1, self.state.import_queue.len()));
+                        ui.label(format!("ファイル名: {}", filename));
+                        ui.add_space(6.0);
+
+                        // カテゴリ選択（左）＋ パラメータ（右）の左右分割レイアウト
+                        ui.horizontal(|ui| {
+                            // 左側: カテゴリ縦リスト
+                            ui.vertical(|ui| {
+                                ui.set_min_width(160.0);
+                                ui.label("カテゴリ:");
+                                for (key, label) in &[
+                                    // 基本
+                                    ("balloon",   "バルーン"),
+                                    ("balloonc",  "入力ボックス"),
+                                    ("arrow",     "矢印"),
+                                    ("online",    "オンライン状態"),
+                                    ("sstp",      "SSTP"),
+                                    ("thumbnail", "サムネイル"),
+                                    // SSP拡張
+                                    ("inputbtn",  "入力ボックスのボタン *"),
+                                    ("marker",    "マーカー *"),
+                                    ("clickwait", "クリック待ち *"),
+                                    // その他
+                                    ("free",      "自由入力"),
+                                ] {
+                                    ui.selectable_value(
+                                        &mut self.state.import_category,
+                                        key.to_string(),
+                                        *label,
+                                    );
+                                }
+                                ui.add_space(4.0);
+                                ui.small("* SSP拡張");
+                            });
+
+                            ui.separator();
+
+                            // 右側: 選択カテゴリのパラメータ
+                            let cat = self.state.import_category.clone();
+                            ui.vertical(|ui| {
+                                ui.set_min_width(220.0);
+                                match cat.as_str() {
+                                    "free" => {
+                                        ui.label("保存ファイル名:");
+                                        ui.add(egui::TextEdit::singleline(&mut self.state.import_custom_filename)
+                                            .desired_width(180.0));
+                                    }
+                                    "thumbnail" => {
+                                        ui.label("thumbnail.png として保存されます。");
+                                    }
+                                    "online" => {
+                                        ui.horizontal(|ui| {
+                                            ui.label("ID番号:");
+                                            ui.add(egui::DragValue::new(&mut self.state.import_target_id_num).range(0..=999));
+                                        });
+                                    }
+                                    "inputbtn" => {
+                                        ui.label("ボタン種別:");
+                                        ui.radio_value(&mut self.state.import_inputbtn_kind, "ok".to_string(), "OK");
+                                        ui.radio_value(&mut self.state.import_inputbtn_kind, "cancel".to_string(), "キャンセル");
+                                        ui.radio_value(&mut self.state.import_inputbtn_kind, "mode".to_string(), "モード切替 (Address Bar用)");
+                                        ui.add_space(4.0);
+                                        ui.label("状態:");
+                                        ui.radio_value(&mut self.state.import_inputbtn_state, "up".to_string(), "通常 (up)");
+                                        ui.radio_value(&mut self.state.import_inputbtn_state, "down".to_string(), "押下 (down)");
+                                    }
+                                    "balloonc" => {
+                                        ui.horizontal(|ui| {
+                                            ui.label("ID番号:");
+                                            egui::ComboBox::from_id_salt("balloonc_id")
+                                                .selected_text(self.state.import_balloonc_id.to_string())
+                                                .show_ui(ui, |ui| {
+                                                    for (i, desc) in [
+                                                        "0: Send ボックス",
+                                                        "1: Communicate ボックス",
+                                                        "2: Teach ボックス",
+                                                        "3: Input ボックス",
+                                                        "4: Address Bar (SSP専用)",
+                                                    ].iter().enumerate() {
+                                                        ui.selectable_value(&mut self.state.import_balloonc_id, i, *desc);
+                                                    }
+                                                });
+                                        });
+                                    }
+                                    _ => {
+                                        // balloon / arrow / clickwait / marker / sstp
+                                        let can_be_generic = matches!(cat.as_str(), "arrow" | "clickwait" | "marker" | "sstp");
+                                        if can_be_generic {
+                                            ui.checkbox(&mut self.state.import_is_scope_specific, "スコープ専用 *");
+                                        } else {
+                                            self.state.import_is_scope_specific = true;
+                                        }
+
+                                        if self.state.import_is_scope_specific {
+                                            ui.horizontal(|ui| {
+                                                ui.label("スコープ番号:");
+                                                ui.add(egui::DragValue::new(&mut self.state.import_scope_num).range(0..=99));
+                                                let n = self.state.import_scope_num;
+                                                ui.small(format!("({}人目)", n + 1));
+                                            });
+                                        }
+
+                                        if cat == "arrow" {
+                                            ui.horizontal(|ui| {
+                                                ui.label("向き:");
+                                                ui.radio_value(&mut self.state.import_arrow_dir, 0u8, "上 (0)");
+                                                ui.radio_value(&mut self.state.import_arrow_dir, 1u8, "下 (1)");
+                                            });
+                                        } else if cat == "balloon" {
+                                            ui.horizontal(|ui| {
+                                                ui.label("ID番号:");
+                                                ui.add(egui::DragValue::new(&mut self.state.import_target_id_num).range(0..=999));
+                                            });
+                                        }
+                                        // clickwait / marker / sstp: 追加パラメータなし
+                                    }
+                                }
+                            });
+                        });
+
+                        let target_filename = self.get_import_target_filename();
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.label("保存ファイル名予定:");
+                            ui.colored_label(egui::Color32::from_rgb(29, 106, 184), &target_filename);
+                        });
+
+                        let mut exists = false;
+                        if let Some(dir) = self.state.asset_dir() {
+                            exists = dir.join(&target_filename).exists();
+                        }
+                        // 警告行は常に1行分確保（有無でウィンドウ高が変わらないように）
+                        if exists {
+                            ui.colored_label(egui::Color32::from_rgb(220, 80, 80), "[!] 既に同名ファイルが存在します。上書きされます。");
+                        } else {
+                            ui.label("");
+                        }
+                        // PNA行も常に1行分確保
+                        if self.state.import_has_pna {
+                            ui.colored_label(egui::Color32::from_rgb(100, 160, 80), "同名の .pna ファイルも検出されました。一緒にインポートします。");
+                        } else {
+                            ui.label("");
+                        }
+
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("インポート (決定)").clicked() {
+                                if target_filename.is_empty() || target_filename.ends_with('.') {
+                                    self.err("保存ファイル名が不正です。");
+                                } else {
+                                    let proceed = if exists {
+                                        rfd::MessageDialog::new()
+                                            .set_title("上書き確認")
+                                            .set_description(format!("ファイル「{}」は既に存在します。\n既存ファイルをバックアップ退避した上で上書きインポートしますか？\n(失敗時は自動復元されます)", target_filename))
+                                            .set_buttons(rfd::MessageButtons::YesNo)
+                                            .show() == rfd::MessageDialogResult::Yes
+                                    } else {
+                                        true
+                                    };
+
+                                    if proceed {
+                                        match crate::gui::loader::import_image_file_safe(&self.state, &path, &target_filename) {
+                                            Ok(_) => {
+                                                next = true;
+                                            }
+                                            Err(e) => {
+                                                self.err(format!("インポートエラー: {}", e));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if ui.button("この画像をスキップ").clicked() {
+                                next = true;
+                            }
+                            if ui.button("インポートをキャンセル").clicked() {
+                                close = true;
+                            }
+                        });
+                    });
+
+                if next {
+                    self.state.import_queue_index += 1;
+                    if self.state.import_queue_index >= self.state.import_queue.len() {
+                        // インポート完了: preview_balloons リストも更新するため完全再読み込み
+                        // テキスト編集内容は保持する
+                        self.reload_asset_folder_keep_texts(ctx);
+                        close = true;
+                    } else {
+                        self.preset_import_from_current_queue();
+                    }
+                }
+                if close {
+                    self.state.show_import_window = false;
+                    self.state.import_queue.clear();
+                    self.state.import_queue_index = 0;
+                }
+            }
         }
 
         // ダイアログ

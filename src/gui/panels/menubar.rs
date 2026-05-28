@@ -6,6 +6,28 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
     egui::menu::bar(ui, |ui| {
         // ファイルメニュー
         ui.menu_button("ファイル", |ui| {
+            if ui.button("新規プロジェクト…").clicked() {
+                ui.close_menu();
+                app.state.show_new_project_window = true;
+            }
+            ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
+                if ui.button("画像をプロジェクトに追加…").clicked() {
+                    ui.close_menu();
+                    let picked = rfd::FileDialog::new()
+                        .set_title("インポートする画像を選択")
+                        .add_filter("PNG画像", &["png"])
+                        .pick_files();
+                    if let Some(files) = picked {
+                        if !files.is_empty() {
+                            app.state.import_queue = files;
+                            app.state.import_queue_index = 0;
+                            app.state.show_import_window = true;
+                            app.preset_import_from_current_queue();
+                        }
+                    }
+                }
+            });
+            ui.separator();
             // 素材フォルダ選択
             {
                 if ui.button("素材フォルダを選択…").clicked() {
