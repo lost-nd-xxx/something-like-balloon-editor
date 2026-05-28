@@ -754,6 +754,77 @@ impl eframe::App for BalloonEditorApp {
             }
         }
 
+        // フォルダからプロジェクトを作成ダイアログ
+        if self.state.show_import_folder_window {
+            let mut close = false;
+            let src = self.state.import_folder_src.clone();
+            let src_name = src.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+
+            egui::Window::new("フォルダからプロジェクトを作成")
+                .collapsible(false)
+                .resizable(false)
+                .fixed_size([380.0, 180.0])
+                .show(ctx, |ui| {
+                    ui.label(format!("取り込み元: {}", src_name));
+                    ui.add_space(6.0);
+                    ui.label("プロジェクト名:");
+                    ui.text_edit_singleline(&mut self.state.import_folder_project_name);
+
+                    // リアルタイム重複チェック
+                    let name_trimmed = self.state.import_folder_project_name.trim().to_string();
+                    let already_exists = crate::core::project::project_exists(&name_trimmed);
+                    if name_trimmed.is_empty() {
+                        self.state.import_folder_warning = String::new();
+                    } else if already_exists {
+                        self.state.import_folder_warning = "[!] 既に存在するプロジェクト名です。作成すると上書きされます。".to_string();
+                    } else {
+                        self.state.import_folder_warning = String::new();
+                    }
+
+                    if !self.state.import_folder_warning.is_empty() {
+                        ui.colored_label(egui::Color32::from_rgb(220, 160, 0), &self.state.import_folder_warning.clone());
+                    } else {
+                        ui.label("");
+                    }
+
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let can_create = !name_trimmed.is_empty();
+                        if ui.add_enabled(can_create, egui::Button::new("作成")).clicked() {
+                            let proceed = if already_exists {
+                                rfd::MessageDialog::new()
+                                    .set_title("上書き確認")
+                                    .set_description(format!("プロジェクト「{}」は既に存在します。\n既存データをバックアップ退避した上で上書き作成しますか？", name_trimmed))
+                                    .set_buttons(rfd::MessageButtons::YesNo)
+                                    .show() == rfd::MessageDialogResult::Yes
+                            } else {
+                                true
+                            };
+                            if proceed {
+                                match crate::core::project::create_project_from_folder(&src, &name_trimmed) {
+                                    Ok(dir) => {
+                                        self.state.selected_asset_dir = Some(dir);
+                                        self.reload_asset_folder(ctx);
+                                        close = true;
+                                    }
+                                    Err(e) => {
+                                        self.err(format!("プロジェクト作成エラー: {}", e));
+                                    }
+                                }
+                            }
+                        }
+                        if ui.button("キャンセル").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+            if close {
+                self.state.show_import_folder_window = false;
+                self.state.import_folder_project_name.clear();
+                self.state.import_folder_warning.clear();
+            }
+        }
+
         // 画像インポート設定ダイアログ
         if self.state.show_import_window {
             let idx = self.state.import_queue_index;

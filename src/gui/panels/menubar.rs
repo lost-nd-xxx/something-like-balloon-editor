@@ -10,6 +10,22 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                 ui.close_menu();
                 app.state.show_new_project_window = true;
             }
+            if ui.button("フォルダからプロジェクトを作成…").clicked() {
+                ui.close_menu();
+                let picked = rfd::FileDialog::new()
+                    .set_title("取り込む素材フォルダを選択")
+                    .pick_folder();
+                if let Some(src) = picked {
+                    let folder_name = src.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    app.state.import_folder_src = src;
+                    app.state.import_folder_project_name = folder_name;
+                    app.state.import_folder_warning = String::new();
+                    app.state.show_import_folder_window = true;
+                }
+            }
             ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
                 if ui.button("画像をプロジェクトに追加…").clicked() {
                     ui.close_menu();

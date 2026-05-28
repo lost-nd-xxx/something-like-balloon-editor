@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// プロジェクトが配置されるベースディレクトリ（実行ファイルと同じディレクトリの `projects` フォルダ）を返します。
 pub fn get_projects_base_dir() -> anyhow::Result<PathBuf> {
@@ -60,6 +60,82 @@ pub fn create_project_raw(name: &str) -> anyhow::Result<PathBuf> {
     }
 
     Ok(project_dir)
+}
+
+/// コピー対象の拡張子
+const IMPORT_EXTENSIONS: &[&str] = &["png", "pna", "pnr", "txt"];
+
+/// 既存フォルダの内容を新規プロジェクトとしてコピーして作成します。
+/// `src_dir` 内の *.png / *.pna / *.pnr / *.txt を `projects/<name>/` にコピーします。
+/// 既に同名プロジェクトが存在する場合は `_backup` に退避し、失敗時はロールバックします。
+pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<PathBuf> {
+    let project_dir = get_project_dir(name)?;
+    let backup_dir = project_dir.with_file_name(format!("{}_backup", name));
+
+    let exists = project_dir.exists();
+
+    // 1. 既存フォルダがある場合は一時退避
+    if exists {
+        if backup_dir.exists() {
+            fs::remove_dir_all(&backup_dir)?;
+        }
+        fs::rename(&project_dir, &backup_dir)?;
+    }
+
+    // 2. プロジェクトフォルダを作成してファイルをコピー
+    let result = (|| -> anyhow::Result<()> {
+        fs::create_dir_all(&project_dir)?;
+
+        let entries = fs::read_dir(src_dir)
+            .map_err(|e| anyhow::anyhow!("フォルダの読み取りに失敗しました: {}", e))?;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let ext = path.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase());
+            let Some(ext) = ext else { continue };
+            if !IMPORT_EXTENSIONS.contains(&ext.as_str()) {
+                continue;
+            }
+            // updates.txt はネットワーク更新用ファイルのためコピー対象外
+            let file_name_lower = path.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.to_lowercase())
+                .unwrap_or_default();
+            if file_name_lower == "updates.txt" {
+                continue;
+            }
+            let file_name = path.file_name().unwrap();
+            fs::copy(&path, project_dir.join(file_name))?;
+        }
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => {
+            // 成功: バックアップを削除
+            if exists && backup_dir.exists() {
+                if let Err(e) = fs::remove_dir_all(&backup_dir) {
+                    eprintln!("警告: 一時バックアップの削除に失敗しました: {}", e);
+                }
+            }
+            Ok(project_dir)
+        }
+        Err(e) => {
+            // 失敗: ロールバック
+            if project_dir.exists() {
+                let _ = fs::remove_dir_all(&project_dir);
+            }
+            if exists && backup_dir.exists() {
+                let _ = fs::rename(&backup_dir, &project_dir);
+            }
+            Err(anyhow::anyhow!("プロジェクトの作成に失敗しました。ロールバックを実行しました。エラー: {}", e))
+        }
+    }
 }
 
 /// 重複対策を統合した安全なプロジェクト作成処理。

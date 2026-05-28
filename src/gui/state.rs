@@ -181,6 +181,14 @@ pub struct AppState {
     pub new_project_name: String,
     pub new_project_warning: String,
 
+    // --- フォルダからプロジェクト作成UI ---
+    pub show_import_folder_window: bool,
+    /// インポート元フォルダパス
+    pub import_folder_src: std::path::PathBuf,
+    /// 作成するプロジェクト名（初期値 = ソースフォルダ名）
+    pub import_folder_project_name: String,
+    pub import_folder_warning: String,
+
     // --- 画像インポートUI（キュー対応） ---
     pub show_import_window: bool,
     pub import_queue: Vec<std::path::PathBuf>,
@@ -270,6 +278,12 @@ impl AppState {
             show_new_project_window: false,
             new_project_name: String::new(),
             new_project_warning: String::new(),
+
+            // --- フォルダからプロジェクト作成UI ---
+            show_import_folder_window: false,
+            import_folder_src: std::path::PathBuf::new(),
+            import_folder_project_name: String::new(),
+            import_folder_warning: String::new(),
 
             // --- 画像インポートUI（キュー対応） ---
             show_import_window: false,
