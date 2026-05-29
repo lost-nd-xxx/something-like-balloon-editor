@@ -43,6 +43,17 @@
 
 ---
 
+## 作者
+
+作者：lost_nd_xxx（ろすえん）
+
+何か問題がございましたら、以下のどちらかからご連絡をお願いします。
+
+- [GitHubのIssues（要アカウント）](https://github.com/lost-nd-xxx/something-like-balloon-editor/issues)
+- [その他連絡先](https://lnx.flop.jp/form/postmail.html)
+
+---
+
 ## 同梱素材について
 
 `sample_balloon/` は、作者が別途配布しているバルーン素材を改変して同梱したものです。
