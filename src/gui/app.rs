@@ -72,6 +72,12 @@ impl BalloonEditorApp {
 
     /// 現在選択中バルーンの合成済み画像を返す
     fn current_balloon_image(&self) -> Option<&RgbaImage> {
+        // PNG一覧プレビュー中は専用キーの画像を優先
+        if self.state.png_preview_name.is_some() {
+            if let Some(img) = self.state.balloon_cache.get("\x00png_preview") {
+                return Some(img);
+            }
+        }
         self.state.balloon_cache.get(&self.state.selected_balloon)
     }
 
@@ -88,6 +94,23 @@ impl BalloonEditorApp {
 
     fn refresh_preview_texture_inner(&mut self, ctx: &Context, show_generating: bool) {
         // 選択バルーンがキャッシュに無ければ遅延合成する（メインスレッドで実行）
+        // PNG一覧プレビュー中は専用画像をそのままテクスチャ化（描画処理なし）
+        if self.state.png_preview_name.is_some() {
+            if let Some(img) = self.state.balloon_cache.get("\x00png_preview") {
+                let (w, h) = img.dimensions();
+                let pixels: Vec<u8> = img.pixels().flat_map(|p| p.0).collect();
+                let color_image = ColorImage::from_rgba_unmultiplied(
+                    [w as usize, h as usize], &pixels
+                );
+                self.preview_texture = Some(ctx.load_texture(
+                    "preview",
+                    color_image,
+                    TextureOptions::NEAREST,
+                ));
+            }
+            return;
+        }
+
         if !self.state.balloon_cache.contains_key(&self.state.selected_balloon) {
             if let Some(asset_dir) = self.state.asset_dir() {
                 if let Err(e) = ensure_balloon_cached(&mut self.state, &asset_dir) {
@@ -231,6 +254,117 @@ impl BalloonEditorApp {
                 self.flush_load_warnings();
             }
             Err(e) => self.err(format!("読み込みエラー:\n\n{}", e)),
+        }
+    }
+
+    /// PNG一覧から単一ファイルをプレビュー表示する（selected_balloon は変更しない）
+    pub fn preview_single_png(&mut self, name: &str, ctx: &Context) {
+        let Some(asset_dir) = self.state.asset_dir() else { return };
+        let path = asset_dir.join(name);
+        if !path.exists() { return; }
+        match crate::core::composer::open_png_rgba(&path) {
+            Ok(img) => {
+                const PREVIEW_KEY: &str = "\x00png_preview";
+                self.state.balloon_cache.insert(PREVIEW_KEY.to_string(), img);
+                self.state.png_preview_name = Some(name.to_string());
+                // バルーンリストのハイライトを消す・位置編集を終了する
+                self.state.selected_balloon = String::new();
+                self.state.drag_edit_target = None;
+                self.refresh_preview_texture_silent(ctx);
+            }
+            Err(e) => self.err(format!("画像の読み込みに失敗しました:\n{}", e)),
+        }
+    }
+
+    /// PNG ファイルを名前変更し、files.txt 内の参照も更新する
+    /// files.txt ありモードでは物理ファイルが存在しないバルーンも対象のため、
+    /// 物理ファイルが存在する場合のみリネームし、files.txt は常に更新する。
+    pub fn rename_png(&mut self, old_name: &str, new_stem: &str, ctx: &Context) {
+        let Some(asset_dir) = self.state.asset_dir() else { return };
+        let old_stem = old_name.trim_end_matches(".png");
+        let new_name = format!("{}.png", new_stem);
+
+        let old_path = asset_dir.join(old_name);
+        let new_path = asset_dir.join(&new_name);
+
+        // 物理ファイルが存在する場合のみリネーム
+        if old_path.exists() {
+            if let Err(e) = std::fs::rename(&old_path, &new_path) {
+                self.err(format!("ファイルの名前変更に失敗しました:\n{}", e));
+                return;
+            }
+            // .pna ファイルが存在すれば合わせてリネーム
+            let old_pna = asset_dir.join(format!("{}.pna", old_stem));
+            let new_pna = asset_dir.join(format!("{}.pna", new_stem));
+            if old_pna.exists() {
+                let _ = std::fs::rename(&old_pna, &new_pna);
+            }
+        }
+
+        // files.txt 内の参照を更新（ありモード・なしモード共通）
+        let files_txt = asset_dir.join("files.txt");
+        if files_txt.exists() {
+            if let Ok(content) = std::fs::read_to_string(&files_txt) {
+                let updated = content
+                    .lines()
+                    .map(|line| {
+                        line.split(',')
+                            .map(|part| {
+                                let trimmed = part.trim();
+                                if trimmed == old_stem {
+                                    part.replacen(trimmed, new_stem, 1)
+                                } else {
+                                    part.to_string()
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let _ = std::fs::write(&files_txt, updated);
+            }
+        }
+
+        // 選択中バルーンが変更対象だった場合は新名前に更新
+        if self.state.selected_balloon == old_name {
+            self.state.selected_balloon = new_name.clone();
+        }
+
+        self.reload_asset_folder_keep_texts(ctx);
+    }
+
+    /// PNG ファイルの削除確認ダイアログを表示して実行する
+    pub fn request_delete_png(&mut self, name: &str) {
+        let Some(asset_dir) = self.state.asset_dir() else { return };
+        let path = asset_dir.join(name);
+        let stem = name.trim_end_matches(".png");
+        let pna_path = asset_dir.join(format!("{}.pna", stem));
+        let has_pna = pna_path.exists();
+
+        let desc = if has_pna {
+            format!("「{}」および「{}.pna」をゴミ箱に移動しますか？", name, stem)
+        } else {
+            format!("「{}」をゴミ箱に移動しますか？", name)
+        };
+
+        let confirmed = rfd::MessageDialog::new()
+            .set_title("削除確認")
+            .set_description(desc)
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .show() == rfd::MessageDialogResult::Yes;
+        if confirmed {
+            if let Err(e) = trash::delete(&path) {
+                self.err(format!("削除に失敗しました:\n{}", e));
+                return;
+            }
+            if has_pna {
+                if let Err(e) = trash::delete(&pna_path) {
+                    self.err(format!("{}.pna の削除に失敗しました:\n{}", stem, e));
+                }
+            }
+            // 削除後は next_reload フラグを立てておく（ctx がここでは使えないため）
+            self.state.pending_reload = true;
         }
     }
 
@@ -686,6 +820,12 @@ impl BalloonEditorApp {
 
 impl eframe::App for BalloonEditorApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        // 削除後などの遅延リロード
+        if self.state.pending_reload {
+            self.state.pending_reload = false;
+            self.reload_asset_folder_keep_texts(ctx);
+        }
+
         // ドラッグ＆ドロップされたファイルの捕捉
         let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
         if !dropped_files.is_empty() {
@@ -1028,6 +1168,67 @@ impl eframe::App for BalloonEditorApp {
                 self.state.show_save_as_project_window = false;
                 self.state.save_as_project_name.clear();
                 self.state.save_as_project_warning.clear();
+            }
+        }
+
+        // ファイル名変更ダイアログ
+        if self.state.show_rename_window {
+            let mut close = false;
+            let target = self.state.rename_target.clone();
+            let old_stem = target.trim_end_matches(".png").to_string();
+
+            egui::Window::new("名前変更")
+                .collapsible(false)
+                .resizable(false)
+                .fixed_size([340.0, 150.0])
+                .show(ctx, |ui| {
+                    ui.label(format!("変更前: {}", old_stem));
+                    ui.add_space(4.0);
+                    ui.label("新しい名前:");
+                    ui.text_edit_singleline(&mut self.state.rename_new_name);
+
+                    let new_stem = self.state.rename_new_name.trim().to_string();
+                    let new_name = format!("{}.png", new_stem);
+                    let is_same = new_stem == old_stem;
+                    let is_empty = new_stem.is_empty();
+                    let already_exists = if !is_same && !is_empty {
+                        self.state.asset_dir()
+                            .map(|d| d.join(&new_name).exists())
+                            .unwrap_or(false)
+                    } else { false };
+
+                    self.state.rename_warning = if is_empty || is_same {
+                        String::new()
+                    } else if already_exists {
+                        "[!] 同名のファイルが既に存在します。".to_string()
+                    } else {
+                        String::new()
+                    };
+
+                    if !self.state.rename_warning.is_empty() {
+                        ui.colored_label(egui::Color32::from_rgb(220, 80, 80), &self.state.rename_warning.clone());
+                    } else {
+                        ui.label("");
+                    }
+
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        let can_rename = !is_empty && !is_same && !already_exists;
+                        if ui.add_enabled(can_rename, egui::Button::new("変更")).clicked() {
+                            let new_stem = new_stem.clone();
+                            self.rename_png(&target, &new_stem, ctx);
+                            close = true;
+                        }
+                        if ui.button("キャンセル").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+            if close {
+                self.state.show_rename_window = false;
+                self.state.rename_target.clear();
+                self.state.rename_new_name.clear();
+                self.state.rename_warning.clear();
             }
         }
 

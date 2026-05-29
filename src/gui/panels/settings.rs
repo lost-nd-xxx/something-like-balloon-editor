@@ -13,16 +13,22 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
     ui.strong("バルーン設定");
     ui.separator();
 
+    let png_preview = app.state.png_preview_name.is_some();
     ScrollArea::vertical().show(ui, |ui| {
         show_basic_info_section(ui, app);
         ui.separator();
-        egui::CollapsingHeader::new("バルーン設定詳細")
-            .default_open(true)
-            .show(ui, |ui| {
-                show_accordion_settings(ui, app, ctx);
-            });
-        ui.separator();
-        show_drag_edit_section(ui, app);
+        // PNG一覧プレビュー中はバルーン設定・位置編集をグレーアウト＆非表示
+        ui.add_enabled_ui(!png_preview, |ui| {
+            if !png_preview {
+                egui::CollapsingHeader::new("バルーン設定詳細")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        show_accordion_settings(ui, app, ctx);
+                    });
+                ui.separator();
+                show_drag_edit_section(ui, app);
+            }
+        });
     });
 }
 

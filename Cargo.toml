@@ -15,6 +15,7 @@ egui = "0.29"
 egui_extras = { version = "0.29", features = ["image"] }
 open = "5"
 rfd = "0.15"
+trash = "5"
 fontdue = "0.9"
 
 [target.'cfg(windows)'.dependencies]

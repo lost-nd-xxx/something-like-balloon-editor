@@ -205,6 +205,17 @@ pub struct AppState {
     pub save_as_project_name: String,
     pub save_as_project_warning: String,
 
+    // --- 非同期処理フラグ ---
+    pub pending_reload: bool,   // 次フレームで reload_asset_folder_keep_texts を実行
+    /// PNG一覧からプレビュー中のファイル名（selected_balloon とは独立）
+    pub png_preview_name: Option<String>,
+
+    // --- ファイル名変更UI ---
+    pub show_rename_window: bool,
+    pub rename_target: String,       // 変更前ファイル名（拡張子含む）
+    pub rename_new_name: String,     // 変更後ファイル名（拡張子なし）
+    pub rename_warning: String,
+
     // --- 画像インポートUI（キュー対応） ---
     pub show_import_window: bool,
     pub import_queue: Vec<std::path::PathBuf>,
@@ -312,6 +323,16 @@ impl AppState {
             show_save_as_project_window: false,
             save_as_project_name: String::new(),
             save_as_project_warning: String::new(),
+
+            // --- 非同期処理フラグ ---
+            pending_reload: false,
+            png_preview_name: None,
+
+            // --- ファイル名変更UI ---
+            show_rename_window: false,
+            rename_target: String::new(),
+            rename_new_name: String::new(),
+            rename_warning: String::new(),
 
             // --- 画像インポートUI（キュー対応） ---
             show_import_window: false,
