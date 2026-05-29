@@ -1,7 +1,7 @@
 use egui::{Context, ScrollArea, Ui};
 use crate::gui::app::BalloonEditorApp;
 use crate::gui::field_def::{
-    ACCORDION_GROUPS, FieldType, GroupVisibility,
+    ACCORDION_GROUPS, DECORATION_GROUPS, FieldType, GroupVisibility,
 };
 use crate::core::descript::{
     parse_descript, set_descript_value, get_color_from_descript, set_color_in_descript,
@@ -13,16 +13,22 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
     ui.strong("バルーン設定");
     ui.separator();
 
+    let png_preview = app.state.png_preview_name.is_some();
     ScrollArea::vertical().show(ui, |ui| {
         show_basic_info_section(ui, app);
         ui.separator();
-        egui::CollapsingHeader::new("バルーン設定詳細")
-            .default_open(true)
-            .show(ui, |ui| {
-                show_accordion_settings(ui, app, ctx);
-            });
-        ui.separator();
-        show_drag_edit_section(ui, app);
+        // PNG一覧プレビュー中はバルーン設定・位置編集をグレーアウト＆非表示
+        ui.add_enabled_ui(!png_preview, |ui| {
+            if !png_preview {
+                egui::CollapsingHeader::new("バルーン設定詳細")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        show_accordion_settings(ui, app, ctx);
+                    });
+                ui.separator();
+                show_drag_edit_section(ui, app, ctx);
+            }
+        });
     });
 }
 
@@ -139,6 +145,110 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
         egui::CollapsingHeader::new(group.name)
             .default_open(false)
             .show(ui, |ui| {
+                // 装飾なしチェックボックスを持つグループか判定
+                let deco_group = DECORATION_GROUPS.iter()
+                    .find(|(name, _, _)| *name == group.name);
+
+                // 装飾なし判定: blendmethod キーが "none" のとき装飾なし
+                let decoration_off = if let Some((_, blend_key, _)) = deco_group {
+                    let descript_text = if use_individual {
+                        app.state.individual_texts.get(&cfg_key).cloned().unwrap_or_default()
+                    } else {
+                        app.state.descript_text.clone()
+                    };
+                    is_decoration_off(&descript_text, blend_key)
+                } else {
+                    false
+                };
+
+                if let Some((_, blend_key, keys)) = deco_group {
+                    let mut checked = decoration_off;
+                    if ui.checkbox(&mut checked, "装飾なし").changed() {
+                        app.state.push_undo();
+                        let mut descript_text = if use_individual {
+                            app.state.individual_texts.get(&cfg_key).cloned().unwrap_or_default()
+                        } else {
+                            app.state.descript_text.clone()
+                        };
+                        let backup_key = format!("{}::{}", cfg_key, blend_key);
+                        if checked {
+                            // ON 直前の各キー値をスナップショットして保持（OFF 復帰時に使う）
+                            let parsed = parse_descript(&descript_text);
+                            let mut snap = std::collections::HashMap::new();
+                            snap.insert(
+                                blend_key.to_string(),
+                                parsed.get(*blend_key).cloned().unwrap_or_else(|| "copypen".to_string()),
+                            );
+                            for (key, _on_default, _off_val) in *keys {
+                                if let Some(v) = parsed.get(*key) {
+                                    snap.insert((*key).to_string(), v.clone());
+                                }
+                            }
+                            app.state.decoration_backup.insert(backup_key, snap);
+
+                            // blendmethod を none に、style/色を装飾なし値に設定
+                            descript_text = set_descript_value(&descript_text, blend_key, "none");
+                            for (key, _on_default, off_val) in *keys {
+                                descript_text = set_descript_value(&descript_text, key, off_val);
+                            }
+                        } else {
+                            // OFF 復帰: 保持していた値があれば復元、なければ初期値
+                            let backup = app.state.decoration_backup.remove(&backup_key);
+                            let restore = |dt: String, key: &str, fallback: &str| -> String {
+                                let v = backup.as_ref()
+                                    .and_then(|m| m.get(key))
+                                    .map(|s| s.as_str())
+                                    .unwrap_or(fallback);
+                                set_descript_value(&dt, key, v)
+                            };
+                            descript_text = restore(descript_text, blend_key, "copypen");
+                            for (key, on_default, _off_val) in *keys {
+                                descript_text = restore(descript_text, key, on_default);
+                            }
+                        }
+                        write_back(app, ctx, &cfg_key, use_individual, descript_text);
+                    }
+                }
+
+                // 装飾なしON中は、グレーアウト表示に「装飾なしにする直前の値」を出す。
+                // 実値は -1/none だが、保持してある backup をマージした一時テキストへ
+                // 描画中だけ差し替える（グレーアウト中で編集不可のため書き戻しは起きない）。
+                let restore_text = if decoration_off {
+                    if let Some((_, blend_key, keys)) = deco_group {
+                        let backup_key = format!("{}::{}", cfg_key, blend_key);
+                        // backup があればその値、無ければ on_default（静的初期値）でマージする。
+                        // → 読み込み時から装飾なしのグループでも想定値が表示される。
+                        let snap = app.state.decoration_backup.get(&backup_key).cloned();
+                        let target = if use_individual {
+                            app.state.individual_texts.get(&cfg_key).cloned().unwrap_or_default()
+                        } else {
+                            app.state.descript_text.clone()
+                        };
+                        let mut merged = target.clone();
+                        let bm = snap.as_ref().and_then(|m| m.get(*blend_key).cloned())
+                            .unwrap_or_else(|| "copypen".to_string());
+                        merged = set_descript_value(&merged, blend_key, &bm);
+                        for (key, on_default, _off) in *keys {
+                            let v = snap.as_ref().and_then(|m| m.get(*key).cloned())
+                                .unwrap_or_else(|| (*on_default).to_string());
+                            merged = set_descript_value(&merged, key, &v);
+                        }
+                        Some((target, merged))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                // 一時差し替え（描画後に元へ戻す）
+                if let Some((_, merged)) = &restore_text {
+                    if use_individual {
+                        app.state.individual_texts.insert(cfg_key.clone(), merged.clone());
+                    } else {
+                        app.state.descript_text = merged.clone();
+                    }
+                }
+
                 egui::Grid::new(group.name)
                     .num_columns(2)
                     .spacing([8.0, 4.0])
@@ -149,6 +259,9 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                                 let shadow_color_key = field.key.trim_end_matches("style").to_string() + "color.r";
                                 let v = resolve_field_value(app, &shadow_color_key, &cfg_key, use_individual);
                                 v.to_lowercase() != "none"
+                            } else if deco_group.is_some() {
+                                // 装飾なしのグループは全フィールドをグレーアウト
+                                !decoration_off
                             } else {
                                 true
                             };
@@ -159,6 +272,15 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                             ui.end_row();
                         }
                     });
+
+                // 一時差し替えを元に戻す
+                if let Some((orig, _)) = restore_text {
+                    if use_individual {
+                        app.state.individual_texts.insert(cfg_key.clone(), orig);
+                    } else {
+                        app.state.descript_text = orig;
+                    }
+                }
             });
     }
 }
@@ -317,7 +439,7 @@ fn show_color_widget(
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut hex_text)
                     .id(egui::Id::new(&hex_key))
-                    .desired_width(58.0)
+                    .desired_width(90.0)
                     .font(egui::TextStyle::Monospace),
             );
 
@@ -429,6 +551,8 @@ fn show_int_widget(
     use crate::gui::state::EditingBuf;
 
     let mut val: i32 = current_str.parse().unwrap_or(0);
+    // スピナーの最小幅を広げる（桁数の多い値でも読みやすく）
+    ui.spacing_mut().interact_size.x = 72.0;
     let response = ui.add(egui::DragValue::new(&mut val).speed(1.0));
 
     if response.gained_focus() {
@@ -535,7 +659,7 @@ fn color32_to_rgb(c: egui::Color32) -> Rgb {
 // 位置編集セクション
 // ---------------------------------------------------------------------------
 
-fn show_drag_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp) {
+fn show_drag_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &egui::Context) {
     egui::CollapsingHeader::new("位置編集")
         .default_open(false)
         .show(ui, |ui| {
@@ -568,13 +692,14 @@ fn show_drag_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp) {
                                                           all_entries.push(("カウンタ数値",   DragEditTarget::Counter));
                 if parts.contains_key("online0.png")   { all_entries.push(("オンライン",     DragEditTarget::OnlineMarker)); }
             }
-            show_drag_entry_list(ui, app, all_entries, &parts);
+            show_drag_entry_list(ui, app, ctx, all_entries, &parts);
         });
 }
 
 fn show_drag_entry_list(
     ui: &mut Ui,
     app: &mut BalloonEditorApp,
+    ctx: &egui::Context,
     entries: Vec<(&str, DragEditTarget)>,
     _parts: &std::collections::HashMap<String, image::RgbaImage>,
 ) {
@@ -589,16 +714,42 @@ fn show_drag_entry_list(
                     if ui.button(egui::RichText::new("編集終了").color(egui::Color32::from_rgb(255, 160, 50))).clicked() {
                         app.state.drag_edit_target = None;
                         app.state.drag_state = None;
+                        // 編集開始前の overlay_mode を復元
+                        if let Some(prev) = app.state.overlay_before_drag_edit.take() {
+                            if app.state.overlay_mode != prev {
+                                app.state.overlay_mode = prev;
+                                app.refresh_preview_texture(ctx);
+                            }
+                        }
                     }
                 } else {
                     if ui.button("編集開始").clicked() {
-                        app.state.drag_edit_target = Some(target);
+                        app.state.drag_edit_target = Some(target.clone());
                         app.state.drag_state = None;
+                        // ValidRect/CommunicateBox 編集開始時はオーバーレイを自動ON
+                        if matches!(target, DragEditTarget::ValidRect | DragEditTarget::CommunicateBox) {
+                            if app.state.overlay_mode != "layout" {
+                                app.state.overlay_before_drag_edit = Some(app.state.overlay_mode.clone());
+                                app.state.overlay_mode = "layout".to_string();
+                                app.refresh_preview_texture(ctx);
+                            } else {
+                                app.state.overlay_before_drag_edit = None;
+                            }
+                        }
                     }
                 }
                 ui.end_row();
             }
         });
+}
+
+/// blendmethod キーの値が "none" なら装飾なし
+fn is_decoration_off(text: &str, blend_key: &str) -> bool {
+    use regex::Regex;
+    let pat = Regex::new(&format!(r"(?m)^{},(.+)$", regex::escape(blend_key))).unwrap();
+    pat.captures(text)
+        .map(|c| c[1].trim().to_lowercase() == "none")
+        .unwrap_or(false)
 }
 
 /// 選択中バルーンが個別設定を持てるかどうかを判定する。

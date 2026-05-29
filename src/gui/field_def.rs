@@ -20,6 +20,73 @@ pub struct FieldDef {
 pub const STYLE_CHOICES:  &[&str] = &["square", "underline", "square+underline", "none"];
 pub const SHADOW_CHOICES: &[&str] = &["offset", "outline"];
 
+/// 「装飾なし」チェックボックスが有効なグループの定義
+/// (グループ名, blendmethodキー, &[(キー, 装飾あり時デフォルト値, 装飾なし時の値)])
+/// 装飾なし = blendmethod,none + style,none + 全色,-1
+/// 装飾あり = blendmethod,copypen + style/色はデフォルト値
+pub const DECORATION_GROUPS: &[(&str, &str, &[(&str, &str, &str)])] = &[
+    ("選択肢(非選択)", "cursor.notselect.blendmethod", &[
+        ("cursor.notselect.style",        "none",  "none"),
+        ("cursor.notselect.font.color.r", "0",     "-1"),
+        ("cursor.notselect.font.color.g", "0",     "-1"),
+        ("cursor.notselect.font.color.b", "255",   "-1"),
+        ("cursor.notselect.pen.color.r",  "0",     "-1"),
+        ("cursor.notselect.pen.color.g",  "0",     "-1"),
+        ("cursor.notselect.pen.color.b",  "0",     "-1"),
+        ("cursor.notselect.brush.color.r","0",     "-1"),
+        ("cursor.notselect.brush.color.g","0",     "-1"),
+        ("cursor.notselect.brush.color.b","0",     "-1"),
+    ]),
+    ("選択肢(選択中)", "cursor.blendmethod", &[
+        ("cursor.style",        "square", "none"),
+        ("cursor.font.color.r", "255",    "-1"),
+        ("cursor.font.color.g", "255",    "-1"),
+        ("cursor.font.color.b", "255",    "-1"),
+        ("cursor.pen.color.r",  "0",      "-1"),
+        ("cursor.pen.color.g",  "0",      "-1"),
+        ("cursor.pen.color.b",  "0",      "-1"),
+        ("cursor.brush.color.r","0",      "-1"),
+        ("cursor.brush.color.g","0",      "-1"),
+        ("cursor.brush.color.b","255",    "-1"),
+    ]),
+    ("アンカー(非選択)", "anchor.notselect.blendmethod", &[
+        ("anchor.notselect.style",        "none",  "none"),
+        ("anchor.notselect.font.color.r", "0",     "-1"),
+        ("anchor.notselect.font.color.g", "0",     "-1"),
+        ("anchor.notselect.font.color.b", "255",   "-1"),
+        ("anchor.notselect.pen.color.r",  "0",     "-1"),
+        ("anchor.notselect.pen.color.g",  "0",     "-1"),
+        ("anchor.notselect.pen.color.b",  "0",     "-1"),
+        ("anchor.notselect.brush.color.r","0",     "-1"),
+        ("anchor.notselect.brush.color.g","0",     "-1"),
+        ("anchor.notselect.brush.color.b","0",     "-1"),
+    ]),
+    ("アンカー(選択中)", "anchor.blendmethod", &[
+        ("anchor.style",        "underline", "none"),
+        ("anchor.font.color.r", "0",         "-1"),
+        ("anchor.font.color.g", "0",         "-1"),
+        ("anchor.font.color.b", "255",       "-1"),
+        ("anchor.pen.color.r",  "0",         "-1"),
+        ("anchor.pen.color.g",  "0",         "-1"),
+        ("anchor.pen.color.b",  "255",       "-1"),
+        ("anchor.brush.color.r","0",         "-1"),
+        ("anchor.brush.color.g","0",         "-1"),
+        ("anchor.brush.color.b","0",         "-1"),
+    ]),
+    ("アンカー(訪問済み)", "anchor.visited.blendmethod", &[
+        ("anchor.visited.style",        "none",  "none"),
+        ("anchor.visited.font.color.r", "170",   "-1"),
+        ("anchor.visited.font.color.g", "0",     "-1"),
+        ("anchor.visited.font.color.b", "170",   "-1"),
+        ("anchor.visited.pen.color.r",  "0",     "-1"),
+        ("anchor.visited.pen.color.g",  "0",     "-1"),
+        ("anchor.visited.pen.color.b",  "0",     "-1"),
+        ("anchor.visited.brush.color.r","0",     "-1"),
+        ("anchor.visited.brush.color.g","0",     "-1"),
+        ("anchor.visited.brush.color.b","0",     "-1"),
+    ]),
+];
+
 /// グループ表示対象: "c" = balloonc系のみ, "ks" = k/s/p系のみ, "all" = 両方
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupVisibility { C, Ks }
@@ -64,7 +131,7 @@ pub static ACCORDION_GROUPS: &[AccordionGroup] = &[
         ],
     },
     AccordionGroup {
-        name: "選択中の選択肢", visibility: GroupVisibility::Ks,
+        name: "選択肢(選択中)", visibility: GroupVisibility::Ks,
         fields: &[
             fd!("cursor.style",       "強調形状", FieldType::Dropdown, STYLE_CHOICES, "square"),
             fd!("cursor.font.color",  "文字色",   FieldType::Color,    &[], "#ffffff"),
@@ -82,7 +149,7 @@ pub static ACCORDION_GROUPS: &[AccordionGroup] = &[
         ],
     },
     AccordionGroup {
-        name: "選択中のアンカー", visibility: GroupVisibility::Ks,
+        name: "アンカー(選択中)", visibility: GroupVisibility::Ks,
         fields: &[
             fd!("anchor.style",       "強調形状", FieldType::Dropdown, STYLE_CHOICES, "underline"),
             fd!("anchor.font.color",  "文字色",   FieldType::Color,    &[], "#0000ff"),
@@ -91,7 +158,7 @@ pub static ACCORDION_GROUPS: &[AccordionGroup] = &[
         ],
     },
     AccordionGroup {
-        name: "訪問済みのアンカー", visibility: GroupVisibility::Ks,
+        name: "アンカー(訪問済み)", visibility: GroupVisibility::Ks,
         fields: &[
             fd!("anchor.visited.style",       "強調形状", FieldType::Dropdown, STYLE_CHOICES, "none"),
             fd!("anchor.visited.font.color",  "文字色",   FieldType::Color,    &[], "#aa00aa"),

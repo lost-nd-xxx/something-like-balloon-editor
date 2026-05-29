@@ -53,12 +53,12 @@ fn load_asset_folder_inner(state: &mut AppState, keep_texts: bool) -> anyhow::Re
 
     // プレビューリスト生成
     state.preview_balloons = if direct {
-        detect_direct_balloons(&asset_dir)
+        detect_direct_balloons(&asset_dir, state.auto_flip)
             .into_iter()
             .map(|n| format!("{}.png", n))
             .collect()
     } else {
-        let odd_flip = make_odd_flip_sources(&layout);
+        let odd_flip = make_odd_flip_sources(&layout, state.auto_flip);
         let all_names: std::collections::HashSet<String> = layout
             .keys()
             .chain(odd_flip.keys())
@@ -146,26 +146,24 @@ pub fn rebuild_balloon_cache(state: &mut AppState, asset_dir: &Path) -> anyhow::
         for name in &state.preview_balloons.clone() {
             let stem = name.trim_end_matches(".png");
             let path = asset_dir.join(name);
-            // 奇数番で元ファイルがない場合は偶数番を反転
+            // ファイルがない場合は自動補完（両方向）
             let img = if path.exists() {
                 open_png_rgba(&path)?
-            } else {
-                // 偶数番を反転して生成
-                let even = even_name_of(stem);
-                let even_path = asset_dir.join(format!("{}.png", even));
-                if even_path.exists() {
-                    crate::core::composer::flip_horizontal(
-                        &open_png_rgba(&even_path)?,
-                    )
+            } else if let Some(src) = flip_source_of(stem) {
+                let src_path = asset_dir.join(format!("{}.png", src));
+                if src_path.exists() {
+                    crate::core::composer::flip_horizontal(&open_png_rgba(&src_path)?)
                 } else {
                     continue;
                 }
+            } else {
+                continue;
             };
             state.balloon_cache.insert(name.clone(), img);
         }
     } else {
         let cs = state.color_set();
-        let images = build_all_balloons(asset_dir, &cs, Some(&state.balloon_layout))?;
+        let images = build_all_balloons(asset_dir, &cs, Some(&state.balloon_layout), state.auto_flip)?;
         state.balloon_cache = images;
     }
 
@@ -203,34 +201,30 @@ pub fn rebuild_selected_balloon(state: &mut AppState, asset_dir: &Path) -> anyho
         let path = asset_dir.join(&selected);
         let img = if path.exists() {
             open_png_rgba(&path)?
-        } else {
-            let even = even_name_of(&selected_stem);
-            let even_path = asset_dir.join(format!("{}.png", even));
-            if even_path.exists() {
-                crate::core::composer::flip_horizontal(&open_png_rgba(&even_path)?)
+        } else if let Some(src) = flip_source_of(&selected_stem) {
+            let src_path = asset_dir.join(format!("{}.png", src));
+            if src_path.exists() {
+                crate::core::composer::flip_horizontal(&open_png_rgba(&src_path)?)
             } else {
                 return Ok(());
             }
+        } else {
+            return Ok(());
         };
         state.balloon_cache.insert(selected.clone(), img);
     } else {
         let cs = state.color_set_for(Some(&selected_stem));
         let layout = &state.balloon_layout;
 
-        // 奇数バルーンの場合は反転元（偶数）も合成が必要
-        let even_stem = even_name_of(&selected_stem);
-        let needs_flip = even_stem != selected_stem && !layout.contains_key(&selected_stem);
-
-        if needs_flip {
-            // 偶数番を合成して反転
-            if let Some(layers) = layout.get(&even_stem) {
-                let even_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
-                let flipped = crate::core::composer::flip_horizontal(&even_img);
-                state.balloon_cache.insert(selected.clone(), flipped);
-            }
-        } else if let Some(layers) = layout.get(&selected_stem) {
+        if let Some(layers) = layout.get(&selected_stem) {
             let img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
             state.balloon_cache.insert(selected.clone(), img);
+        } else if let Some(src) = flip_source_of(&selected_stem) {
+            if let Some(layers) = layout.get(&src) {
+                let src_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
+                let flipped = crate::core::composer::flip_horizontal(&src_img);
+                state.balloon_cache.insert(selected.clone(), flipped);
+            }
         }
     }
 
@@ -266,31 +260,30 @@ pub fn ensure_balloon_cached(state: &mut AppState, asset_dir: &Path) -> anyhow::
         let path = asset_dir.join(&selected);
         let img = if path.exists() {
             open_png_rgba(&path)?
-        } else {
-            let even = even_name_of(&selected_stem);
-            let even_path = asset_dir.join(format!("{}.png", even));
-            if even_path.exists() {
-                crate::core::composer::flip_horizontal(&open_png_rgba(&even_path)?)
+        } else if let Some(src) = flip_source_of(&selected_stem) {
+            let src_path = asset_dir.join(format!("{}.png", src));
+            if src_path.exists() {
+                crate::core::composer::flip_horizontal(&open_png_rgba(&src_path)?)
             } else {
                 return Ok(());
             }
+        } else {
+            return Ok(());
         };
         state.balloon_cache.insert(selected, img);
     } else {
         let cs = state.color_set_for(Some(&selected_stem));
         let layout = &state.balloon_layout;
-        let even_stem = even_name_of(&selected_stem);
-        let needs_flip = even_stem != selected_stem && !layout.contains_key(&selected_stem);
 
-        if needs_flip {
-            if let Some(layers) = layout.get(&even_stem) {
-                let even_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
-                let flipped = crate::core::composer::flip_horizontal(&even_img);
-                state.balloon_cache.insert(selected, flipped);
-            }
-        } else if let Some(layers) = layout.get(&selected_stem) {
+        if let Some(layers) = layout.get(&selected_stem) {
             let img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
             state.balloon_cache.insert(selected, img);
+        } else if let Some(src) = flip_source_of(&selected_stem) {
+            if let Some(layers) = layout.get(&src) {
+                let src_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
+                let flipped = crate::core::composer::flip_horizontal(&src_img);
+                state.balloon_cache.insert(selected, flipped);
+            }
         }
     }
 
@@ -312,14 +305,15 @@ pub fn build_all_balloons_for_export(
             let path = asset_dir.join(name);
             let img = if path.exists() {
                 open_png_rgba(&path)?
-            } else {
-                let even = even_name_of(stem);
-                let even_path = asset_dir.join(format!("{}.png", even));
-                if even_path.exists() {
-                    crate::core::composer::flip_horizontal(&open_png_rgba(&even_path)?)
+            } else if let Some(src) = flip_source_of(stem) {
+                let src_path = asset_dir.join(format!("{}.png", src));
+                if src_path.exists() {
+                    crate::core::composer::flip_horizontal(&open_png_rgba(&src_path)?)
                 } else {
                     continue;
                 }
+            } else {
+                continue;
             };
             result.insert(name.clone(), img);
         }
@@ -329,20 +323,21 @@ pub fn build_all_balloons_for_export(
             let stem = name.trim_end_matches(".png");
             // 個別色があればそちらを優先、なければ共通色
             let cs = state.color_set_for(Some(stem));
-            let even_stem = even_name_of(stem);
-            let needs_flip = even_stem != stem && !layout.contains_key(stem);
 
-            let img = if needs_flip {
-                if let Some(layers) = layout.get(&even_stem) {
-                    let even_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
-                    crate::core::composer::flip_horizontal(&even_img)
+            let img = if let Some(layers) = layout.get(stem) {
+                // files.txt に直接定義あり
+                crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?
+            } else if let Some(src) = flip_source_of(stem).filter(|s| layout.contains_key(s)) {
+                if let Some(layers) = layout.get(&src) {
+                    let src_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
+                    crate::core::composer::flip_horizontal(&src_img)
                 } else {
                     continue;
                 }
-            } else if let Some(layers) = layout.get(stem) {
-                crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?
             } else {
-                continue;
+                {
+                    continue;
+                }
             };
             result.insert(name.clone(), img);
         }
@@ -479,6 +474,30 @@ fn even_name_of(stem: &str) -> String {
         }
     }
     stem.to_string()
+}
+
+/// 偶数番バルーン名から対応する奇数番バルーン名を返す（偶数でなければそのまま返す）
+fn odd_name_of(stem: &str) -> String {
+    for prefix in &["balloonk", "balloons"] {
+        if let Some(rest) = stem.strip_prefix(prefix) {
+            if let Ok(n) = rest.parse::<u32>() {
+                if n % 2 == 0 {
+                    return format!("{}{}", prefix, n + 1);
+                }
+            }
+        }
+    }
+    stem.to_string()
+}
+
+/// stem の自動補完反転元を返す（奇数→偶数、偶数→奇数の両方向）
+/// 反転元が存在しない場合は None
+fn flip_source_of(stem: &str) -> Option<String> {
+    let even = even_name_of(stem);
+    if even != stem { return Some(even); }
+    let odd = odd_name_of(stem);
+    if odd != stem { return Some(odd); }
+    None
 }
 
 /// 指定された画像ファイルが 24bit PNG（透過色なし）であるか判定します。

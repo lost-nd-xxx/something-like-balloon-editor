@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use encoding_rs::Encoding;
 
 /// プロジェクトが配置されるベースディレクトリ（実行ファイルと同じディレクトリの `projects` フォルダ）を返します。
 pub fn get_projects_base_dir() -> anyhow::Result<PathBuf> {
@@ -123,7 +124,13 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
                 continue;
             }
             let file_name = path.file_name().unwrap();
-            fs::copy(&path, project_dir.join(file_name))?;
+            let dest = project_dir.join(file_name);
+            if ext == "txt" {
+                // txt ファイルは UTF-8 に変換してコピーする
+                convert_txt_to_utf8(&path, &dest)?;
+            } else {
+                fs::copy(&path, &dest)?;
+            }
         }
         Ok(())
     })();
@@ -193,4 +200,72 @@ pub fn create_project_safe(name: &str) -> anyhow::Result<PathBuf> {
             Err(anyhow::anyhow!("プロジェクトの新規作成に失敗しました。ロールバックを実行しました。エラー: {}", e))
         }
     }
+}
+
+/// txt ファイルを読み込み、UTF-8 に変換して書き出す。
+/// BOM 付き UTF-8 / 純粋 UTF-8 はそのままコピー。
+/// Shift_JIS / EUC-JP 等は encoding_rs で変換する。
+/// 変換できないバイトは U+FFFD で置換して続行する。
+fn convert_txt_to_utf8(src: &Path, dest: &Path) -> anyhow::Result<()> {
+    let bytes = fs::read(src)?;
+
+    // BOM 付き UTF-8 または BOM なし UTF-8 はそのまま書き出す
+    let check_bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
+    if std::str::from_utf8(check_bytes).is_ok() {
+        fs::write(dest, &bytes)?;
+        return Ok(());
+    }
+
+    // charset 行からエンコーディングを取得（なければ Shift_JIS を試みる）
+    let charset = detect_charset_from_bytes(&bytes);
+    let encoding = charset
+        .as_deref()
+        .and_then(|cs| Encoding::for_label(cs.as_bytes()))
+        .unwrap_or(encoding_rs::SHIFT_JIS);
+
+    let (cow, _, _had_errors) = encoding.decode(&bytes);
+    fs::write(dest, cow.as_bytes())?;
+    Ok(())
+}
+
+/// バイト列の先頭部分から `charset,xxx` 行を探して返す（見つからなければ None）
+fn detect_charset_from_bytes(bytes: &[u8]) -> Option<String> {
+    // 最初の 2KB だけ検査（エンコーディング不明なのでバイト列で検索）
+    let head = &bytes[..bytes.len().min(2048)];
+    // ASCII 互換として行単位で切る
+    for line in head.split(|&b| b == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if line.starts_with(b"//") { continue; }
+        if let Some(rest) = line.strip_prefix(b"charset,") {
+            let cs = std::str::from_utf8(rest).ok()?.trim().to_string();
+            if !cs.is_empty() { return Some(cs); }
+        }
+    }
+    None
+}
+
+/// フォルダ内の descript.txt を読み込んで、copypen/none 以外の blendmethod 値を返す。
+/// 問題がなければ空の Vec を返す。
+pub fn check_blendmethod_warnings(project_dir: &Path) -> Vec<String> {
+    let descript_path = project_dir.join("descript.txt");
+    let Ok(text) = fs::read_to_string(&descript_path) else { return Vec::new() };
+
+    let mut warnings = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with("//") || line.is_empty() { continue; }
+        if let Some(pos) = line.find(',') {
+            let key = line[..pos].trim();
+            let val = line[pos+1..].trim().to_lowercase();
+            if (key == "cursor.blendmethod" || key == "anchor.blendmethod")
+                && val != "none" && val != "copypen"
+            {
+                warnings.push(format!(
+                    "{}={} (このアプリでは描画を再現できません)",
+                    key, &line[pos+1..].trim()
+                ));
+            }
+        }
+    }
+    warnings
 }
