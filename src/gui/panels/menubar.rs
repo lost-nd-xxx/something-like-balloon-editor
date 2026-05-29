@@ -6,17 +6,17 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
     egui::menu::bar(ui, |ui| {
         // ファイルメニュー
         ui.menu_button("ファイル", |ui| {
-            if ui.button("新規プロジェクト…").clicked() {
+            if ui.button("新規プロジェクト...").clicked() {
                 ui.close_menu();
                 app.state.show_new_project_window = true;
             }
-            if ui.button("プロジェクトを開く…").clicked() {
+            if ui.button("プロジェクトを開く...").clicked() {
                 ui.close_menu();
                 app.state.open_project_list = crate::core::project::list_projects();
                 app.state.open_project_selected = None;
                 app.state.show_open_project_window = true;
             }
-            if ui.button("フォルダからプロジェクトを作成…").clicked() {
+            if ui.button("フォルダからプロジェクトを作成...").clicked() {
                 ui.close_menu();
                 let picked = rfd::FileDialog::new()
                     .set_title("取り込む素材フォルダを選択")
@@ -40,7 +40,7 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                 }
             });
             ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
-                if ui.button("別名で保存…").clicked() {
+                if ui.button("別名で保存...").clicked() {
                     ui.close_menu();
                     let current_name = app.state.asset_dir()
                         .and_then(|d| d.file_name().map(|n| n.to_string_lossy().to_string()))
@@ -52,7 +52,7 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
             });
             ui.separator();
             ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
-                if ui.button("画像をプロジェクトに追加…").clicked() {
+                if ui.button("画像をプロジェクトに追加...").clicked() {
                     ui.close_menu();
                     let picked = rfd::FileDialog::new()
                         .set_title("インポートする画像を選択")
@@ -76,15 +76,6 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                     }
                 }
             });
-            ui.separator();
-            if ui.button("プロファイルを保存…").clicked() {
-                ui.close_menu();
-                app.save_profile_dialog();
-            }
-            if ui.button("プロファイルを読み込み…").clicked() {
-                ui.close_menu();
-                app.load_profile_dialog(ctx);
-            }
             ui.separator();
             if ui.button("バルーンとして出力  (Ctrl+E)").clicked() {
                 ui.close_menu();
@@ -115,6 +106,14 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                 ui.close_menu();
                 app.state.push_undo();
                 use crate::gui::state::LAYER_DEFS;
+                // 編集中バッファを破棄（残っていると再読み込み後に書き戻されるため）
+                app.state.editing_buf = None;
+                app.state.basic_info.clear();
+                // 共通テキストをディスクの保存済み内容へ戻す
+                // （reload は slbe_profile.json の色や {stem}s.txt を復活させるので、
+                //  この後でメモリ上の色・個別設定を初期値へ上書きし直す）
+                app.reload_asset_folder(ctx);
+                // レイヤー色を初期値へ
                 for &(k, _, c) in LAYER_DEFS {
                     app.state.layer_colors.insert(k.to_string(), c);
                 }
@@ -122,13 +121,11 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                     .unwrap_or(crate::core::color::Rgb(29, 106, 184));
                 app.state.parts_colors.clear();
                 app.state.parts_colors.insert("all".to_string(), default_parts);
-                // 個別色・個別テキスト設定もリセット
+                // reload で {stem}s.txt から復活した個別設定をメモリから消す。
+                // （ディスク上のファイルは次回保存時に削除される）
                 app.state.individual_colors.clear();
                 app.state.individual_texts.clear();
-                // 編集中バッファを破棄（残っていると再読み込み後に書き戻されるため）
-                app.state.editing_buf = None;
-                app.state.basic_info.clear();
-                app.reload_asset_folder(ctx);
+                app.rebuild_and_refresh(ctx);
             }
             ui.separator();
             let direct = app.state.direct_image_mode;
