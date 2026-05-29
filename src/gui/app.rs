@@ -1161,26 +1161,14 @@ impl eframe::App for BalloonEditorApp {
                             if name_trimmed.is_empty() {
                                 self.state.new_project_warning = "プロジェクト名を入力してください。".to_string();
                             } else {
-                                let proceed = if exists {
-                                    rfd::MessageDialog::new()
-                                        .set_title("上書き確認")
-                                        .set_description(format!("プロジェクト「{}」は既に存在します。\n既存データをバックアップ退避した上で上書き作成しますか？\n(失敗時は自動で復元されます)", name_trimmed))
-                                        .set_buttons(rfd::MessageButtons::YesNo)
-                                        .show() == rfd::MessageDialogResult::Yes
-                                } else {
-                                    true
-                                };
-
-                                if proceed {
-                                    match crate::core::project::create_project_safe(&name_trimmed) {
-                                        Ok(dir) => {
-                                            self.state.selected_asset_dir = Some(dir);
-                                            self.reload_asset_folder(ctx);
-                                            close = true;
-                                        }
-                                        Err(e) => {
-                                            self.err(format!("新規作成エラー: {}", e));
-                                        }
+                                match crate::core::project::create_project_safe(&name_trimmed) {
+                                    Ok(dir) => {
+                                        self.state.selected_asset_dir = Some(dir);
+                                        self.reload_asset_folder(ctx);
+                                        close = true;
+                                    }
+                                    Err(e) => {
+                                        self.err(format!("新規作成エラー: {}", e));
                                     }
                                 }
                             }
@@ -1233,37 +1221,26 @@ impl eframe::App for BalloonEditorApp {
                     ui.horizontal(|ui| {
                         let can_create = !name_trimmed.is_empty();
                         if ui.add_enabled(can_create, egui::Button::new("作成")).clicked() {
-                            let proceed = if already_exists {
-                                rfd::MessageDialog::new()
-                                    .set_title("上書き確認")
-                                    .set_description(format!("プロジェクト「{}」は既に存在します。\n既存データをバックアップ退避した上で上書き作成しますか？", name_trimmed))
-                                    .set_buttons(rfd::MessageButtons::YesNo)
-                                    .show() == rfd::MessageDialogResult::Yes
-                            } else {
-                                true
-                            };
-                            if proceed {
-                                match crate::core::project::create_project_from_folder(&src, &name_trimmed) {
-                                    Ok(dir) => {
-                                        // blendmethod 警告チェック
-                                        let bm_warns = crate::core::project::check_blendmethod_warnings(&dir);
-                                        self.state.selected_asset_dir = Some(dir);
-                                        self.reload_asset_folder(ctx);
-                                        if !bm_warns.is_empty() {
-                                            self.dialog = Some((
-                                                "blendmethod 警告".into(),
-                                                format!(
-                                                    "以下の blendmethod 設定はこのアプリでは再現できません。\n\
-                                                     SSPでの表示と異なる場合があります。\n\n{}",
-                                                    bm_warns.join("\n")
-                                                ),
-                                            ));
-                                        }
-                                        close = true;
+                            match crate::core::project::create_project_from_folder(&src, &name_trimmed) {
+                                Ok(dir) => {
+                                    // blendmethod 警告チェック
+                                    let bm_warns = crate::core::project::check_blendmethod_warnings(&dir);
+                                    self.state.selected_asset_dir = Some(dir);
+                                    self.reload_asset_folder(ctx);
+                                    if !bm_warns.is_empty() {
+                                        self.dialog = Some((
+                                            "blendmethod 警告".into(),
+                                            format!(
+                                                "以下の blendmethod 設定はこのアプリでは再現できません。\n\
+                                                 SSPでの表示と異なる場合があります。\n\n{}",
+                                                bm_warns.join("\n")
+                                            ),
+                                        ));
                                     }
-                                    Err(e) => {
-                                        self.err(format!("プロジェクト作成エラー: {}", e));
-                                    }
+                                    close = true;
+                                }
+                                Err(e) => {
+                                    self.err(format!("プロジェクト作成エラー: {}", e));
                                 }
                             }
                         }
@@ -1317,20 +1294,9 @@ impl eframe::App for BalloonEditorApp {
                     ui.horizontal(|ui| {
                         let can_save = !name_trimmed.is_empty() && !is_same;
                         if ui.add_enabled(can_save, egui::Button::new("保存")).clicked() {
-                            let proceed = if already_exists {
-                                rfd::MessageDialog::new()
-                                    .set_title("上書き確認")
-                                    .set_description(format!("プロジェクト「{}」は既に存在します。\n上書きしますか？", name_trimmed))
-                                    .set_buttons(rfd::MessageButtons::YesNo)
-                                    .show() == rfd::MessageDialogResult::Yes
-                            } else {
-                                true
-                            };
-                            if proceed {
-                                let name = name_trimmed.clone();
-                                self.save_project_as(&name, ctx);
-                                close = true;
-                            }
+                            let name = name_trimmed.clone();
+                            self.save_project_as(&name, ctx);
+                            close = true;
                         }
                         if ui.button("キャンセル").clicked() {
                             close = true;
@@ -1601,7 +1567,7 @@ impl eframe::App for BalloonEditorApp {
                                     let proceed = if exists {
                                         rfd::MessageDialog::new()
                                             .set_title("上書き確認")
-                                            .set_description(format!("ファイル「{}」は既に存在します。\n既存ファイルをバックアップ退避した上で上書きインポートしますか？\n(失敗時は自動復元されます)", target_filename))
+                                            .set_description(format!("ファイル「{}」は既に存在します。上書きしますか？", target_filename))
                                             .set_buttons(rfd::MessageButtons::YesNo)
                                             .show() == rfd::MessageDialogResult::Yes
                                     } else {

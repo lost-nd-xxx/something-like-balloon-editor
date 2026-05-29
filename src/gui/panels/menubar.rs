@@ -130,7 +130,7 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                 app.rebuild_and_refresh(ctx);
             }
             ui.separator();
-            ui.add_enabled_ui(app.state.is_project_dir() && !app.state.direct_image_mode, |ui| {
+            ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
                 if ui.button("レイアウト定義を編集...").clicked() {
                     ui.close_menu();
                     app.state.show_files_editor_window = true;
