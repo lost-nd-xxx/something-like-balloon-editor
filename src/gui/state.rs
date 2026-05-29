@@ -248,6 +248,9 @@ pub struct AppState {
     pub rename_new_name: String,     // 変更後ファイル名（拡張子なし）
     pub rename_warning: String,
 
+    // --- files.txt エディタUI ---
+    pub show_files_editor_window: bool,
+
     // --- 画像インポートUI（キュー対応） ---
     pub show_import_window: bool,
     pub import_queue: Vec<std::path::PathBuf>,
@@ -364,6 +367,9 @@ impl AppState {
             show_save_as_project_window: false,
             save_as_project_name: String::new(),
             save_as_project_warning: String::new(),
+
+            // --- files.txt エディタUI ---
+            show_files_editor_window: false,
 
             // --- 非同期処理フラグ ---
             pending_reload: false,

@@ -1,6 +1,5 @@
-// 「//」を先頭に書いた行はコメント行、実際の動作では無視される
-// 記述方法は「バルーン種別,ファイル名:色種別,...」（奥側から順に）
-// 色種別: edge（縁取り色）/ base（塗り色）/ text（入力ボックスの題字色）/ none（塗り替えなし）
+// 書式: バルーン種別,ファイル名:色種別,... （奥側から順に）
+// 色種別: base/edge/text/none
 
 balloonc0,c_edge.png:edge,c_base.png:base,c0_text.png:text
 balloonc1,c_edge.png:edge,c_base.png:base,c1_text.png:text

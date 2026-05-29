@@ -47,7 +47,16 @@ fn load_asset_folder_inner(state: &mut AppState, keep_texts: bool) -> anyhow::Re
 
     // slbe_files.txt のパース（なければ画像編集なしモード）
     // load_balloon_layout は旧 files.txt があれば自動移行する
-    let layout = load_balloon_layout(&asset_dir)?;
+    // keep_texts のときはメモリ上の slbe_files_text からパースし、ディスクは読まない
+    let layout = if keep_texts && !state.slbe_files_text.is_empty() {
+        // メモリ上のテキストからパース（エラー時はディスクにフォールバック）
+        match crate::core::layout::parse_balloon_layout(&state.slbe_files_text, &asset_dir) {
+            Ok(l) => l,
+            Err(_) => load_balloon_layout(&asset_dir)?,
+        }
+    } else {
+        load_balloon_layout(&asset_dir)?
+    };
     let direct = is_direct_image_mode(&layout);
     state.direct_image_mode = direct;
     state.balloon_layout = layout.clone();
