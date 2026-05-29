@@ -84,10 +84,10 @@ impl ProjectProfile {
     }
 }
 
-/// プロジェクトプロファイル（slbe_profile.json）の保存先パスを返す。
-/// プロジェクト直下の `profile/slbe_profile.json`。
+/// プロジェクトプロファイル（profile.json）の保存先パスを返す。
+/// プロジェクト直下の `profile/slbe/profile.json`。
 pub fn project_profile_path(asset_dir: &Path) -> std::path::PathBuf {
-    asset_dir.join("profile").join("slbe_profile.json")
+    asset_dir.join("profile").join("slbe").join("profile.json")
 }
 
 /// プロジェクトプロファイルをJSONファイルから読み込む。失敗時はエラーを返す。

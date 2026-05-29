@@ -77,10 +77,12 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                 }
             });
             ui.separator();
-            if ui.button("バルーンとして出力  (Ctrl+E)").clicked() {
-                ui.close_menu();
-                app.export();
-            }
+            ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
+                if ui.button("バルーンとして出力  (Ctrl+E)").clicked() {
+                    ui.close_menu();
+                    app.export();
+                }
+            });
         });
 
         // 編集メニュー
@@ -142,7 +144,11 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
             if ui.checkbox(&mut auto_flip, "奇数・偶数番バルーンを自動補完").changed() {
                 app.state.auto_flip = auto_flip;
                 ui.close_menu();
+                // reload_asset_folder は slbe_profile.json から no_balloon_color を復元してしまうため、
+                // reload 後に現在の値で上書きして保持する
+                let saved_no_color = app.state.no_balloon_color;
                 app.reload_asset_folder(ctx);
+                app.state.no_balloon_color = saved_no_color;
             }
         });
 

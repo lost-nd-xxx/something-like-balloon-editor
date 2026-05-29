@@ -105,6 +105,37 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
 
         for entry in entries.flatten() {
             let path = entry.path();
+
+            // profile/slbe/ サブフォルダは中身ごとコピー（files.txt / profile.json 等）
+            // SSPが作成する profile/var.txt 等は対象外
+            if path.is_dir() {
+                let dir_name = path.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.to_lowercase())
+                    .unwrap_or_default();
+                if dir_name == "profile" {
+                    // profile/slbe/ のみを対象とする
+                    let slbe_src = path.join("slbe");
+                    if slbe_src.is_dir() {
+                        let dest_slbe = project_dir.join("profile").join("slbe");
+                        fs::create_dir_all(&dest_slbe)?;
+                        for sub in fs::read_dir(&slbe_src).into_iter().flatten().flatten() {
+                            let sub_path = sub.path();
+                            if !sub_path.is_file() { continue; }
+                            let sub_name = sub_path.file_name().unwrap();
+                            let sub_name_lower = sub_name.to_string_lossy().to_lowercase();
+                            let dest = dest_slbe.join(sub_name);
+                            if sub_name_lower.ends_with(".txt") {
+                                convert_txt_to_utf8(&sub_path, &dest)?;
+                            } else {
+                                fs::copy(&sub_path, &dest)?;
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
             if !path.is_file() {
                 continue;
             }
@@ -124,7 +155,14 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
                 continue;
             }
             let file_name = path.file_name().unwrap();
-            let dest = project_dir.join(file_name);
+            // files.txt は profile/slbe/files.txt として取り込む
+            let dest = if file_name_lower == "files.txt" {
+                let slbe_dir = project_dir.join("profile").join("slbe");
+                fs::create_dir_all(&slbe_dir)?;
+                slbe_dir.join("files.txt")
+            } else {
+                project_dir.join(file_name)
+            };
             if ext == "txt" {
                 // txt ファイルは UTF-8 に変換してコピーする
                 convert_txt_to_utf8(&path, &dest)?;

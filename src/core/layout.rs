@@ -138,24 +138,51 @@ pub fn parse_balloon_layout(
             .map(|e| format!("  • {}", e))
             .collect::<Vec<_>>()
             .join("\n");
-        anyhow::bail!("files.txt にエラーがあります:\n\n{}", msg);
+        anyhow::bail!("slbe_files.txt にエラーがあります:\n\n{}", msg);
     }
 
     Ok(layout)
 }
 
-/// asset_dir/files.txt を読んでパース結果を返す。
-/// files.txt が存在しない場合は空の HashMap を返す（画像編集なしモード）。
+/// `asset_dir/profile/slbe/files.txt` のパスを返す。
+pub fn slbe_files_txt_path(asset_dir: &Path) -> std::path::PathBuf {
+    asset_dir.join("profile").join("slbe").join("files.txt")
+}
+
+/// asset_dir/profile/slbe/files.txt を読んでパース結果を返す。
+/// ファイルが存在しない場合は空の HashMap を返す（画像編集なしモード）。
+///
+/// リリース済みの旧パス `files.txt`（素材フォルダ直下）が存在する場合は
+/// `profile/slbe/files.txt` へ自動移行する（パース成功かつ空でない場合のみ）。
 pub fn load_balloon_layout(asset_dir: &Path) -> anyhow::Result<HashMap<String, LayerList>> {
     // フォルダ自体が存在しない場合は空レイアウトを返す
     if !asset_dir.is_dir() {
         return Ok(HashMap::new());
     }
-    let files_txt = asset_dir.join("files.txt");
-    if !files_txt.exists() {
+
+    let new_path = slbe_files_txt_path(asset_dir);
+
+    // 旧パス: files.txt → profile/slbe/files.txt
+    // パース成功かつ空でない場合のみ移行（このアプリ以外の files.txt は移行しない）
+    let old_path = asset_dir.join("files.txt");
+    if old_path.exists() && !new_path.exists() {
+        let old_text = std::fs::read_to_string(&old_path)?;
+        let is_valid_slbe = match parse_balloon_layout(&old_text, asset_dir) {
+            Ok(layout) => !layout.is_empty(),
+            Err(_) => false,
+        };
+        if is_valid_slbe {
+            if let Some(parent) = new_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::rename(&old_path, &new_path)?;
+        }
+    }
+
+    if !new_path.exists() {
         return Ok(HashMap::new());
     }
-    let text = std::fs::read_to_string(&files_txt)?;
+    let text = std::fs::read_to_string(&new_path)?;
     parse_balloon_layout(&text, asset_dir)
 }
 
