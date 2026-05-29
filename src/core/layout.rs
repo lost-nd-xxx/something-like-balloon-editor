@@ -43,10 +43,6 @@ impl ColorType {
 /// 1バルーン分のレイヤー定義（ファイル名 + 色種別 のリスト）
 pub type LayerList = Vec<(String, ColorType)>;
 
-/// 必須バルーン名
-const REQUIRED_BALLOONS: &[&str] = &[
-    "balloonc0", "balloonc1", "balloonc2", "balloonc3", "balloons0",
-];
 
 /// files.txt テキストをパースして {バルーン名: LayerList} を返す
 ///
@@ -135,14 +131,6 @@ pub fn parse_balloon_layout(
         }
     }
 
-    // 必須バルーンの存在チェック
-    let mut required: Vec<&str> = REQUIRED_BALLOONS.to_vec();
-    required.sort_unstable();
-    for req in required {
-        if !layout.contains_key(req) {
-            errors.push(format!("必須バルーン 「{}」 が定義されていません。", req));
-        }
-    }
 
     if !errors.is_empty() {
         let msg = errors
@@ -176,10 +164,15 @@ pub fn is_direct_image_mode(layout: &HashMap<String, LayerList>) -> bool {
     layout.is_empty()
 }
 
-/// layout のキーから奇数番バルーンの反転元辞書を動的に生成する
+/// layout のキーから自動補完対象の反転元辞書を動的に生成する
 ///
-/// 返り値: {奇数番バルーン名: 反転元偶数番バルーン名}
-pub fn make_odd_flip_sources(layout: &HashMap<String, LayerList>) -> HashMap<String, String> {
+/// auto_flip=true の場合、偶数番→奇数番、奇数番→偶数番の両方向を補完する。
+/// 返り値: {補完先バルーン名: 反転元バルーン名}
+pub fn make_odd_flip_sources(layout: &HashMap<String, LayerList>, auto_flip: bool) -> HashMap<String, String> {
+    if !auto_flip {
+        return HashMap::new();
+    }
+
     let mut result: HashMap<String, String> = HashMap::new();
 
     // balloonk / balloons 系
@@ -194,13 +187,22 @@ pub fn make_odd_flip_sources(layout: &HashMap<String, LayerList>) -> HashMap<Str
         if nums.is_empty() {
             continue;
         }
-        let max_even = nums.iter().filter(|&&n| n % 2 == 0).copied().max().unwrap_or(0);
-        for even in (0..=max_even).step_by(2) {
-            let odd = even + 1;
-            let odd_name  = format!("{}{}", prefix, odd);
+        let max_num = nums.iter().copied().max().unwrap_or(0);
+        // 偶数→奇数 と 奇数→偶数 の両方向を補完
+        let pairs: Vec<(u32, u32)> = (0..=max_num)
+            .step_by(2)
+            .map(|even| (even, even + 1))
+            .collect();
+        for (even, odd) in pairs {
             let even_name = format!("{}{}", prefix, even);
-            if !layout.contains_key(&odd_name) && layout.contains_key(&even_name) {
+            let odd_name  = format!("{}{}", prefix, odd);
+            // 偶数あり・奇数なし → 奇数を補完
+            if layout.contains_key(&even_name) && !layout.contains_key(&odd_name) {
                 result.insert(odd_name, even_name);
+            }
+            // 奇数あり・偶数なし → 偶数を補完
+            else if layout.contains_key(&odd_name) && !layout.contains_key(&even_name) {
+                result.insert(even_name, odd_name);
             }
         }
     }
@@ -216,13 +218,18 @@ pub fn make_odd_flip_sources(layout: &HashMap<String, LayerList>) -> HashMap<Str
         }
     }
     for (base, nums) in &pdef_groups {
-        let max_even = nums.iter().filter(|&&n| n % 2 == 0).copied().max().unwrap_or(0);
-        for even in (0..=max_even).step_by(2) {
-            let odd = even + 1;
-            let odd_name  = format!("{}{}", base, odd);
+        let max_num = nums.iter().copied().max().unwrap_or(0);
+        let pairs: Vec<(u32, u32)> = (0..=max_num)
+            .step_by(2)
+            .map(|even| (even, even + 1))
+            .collect();
+        for (even, odd) in pairs {
             let even_name = format!("{}{}", base, even);
-            if !layout.contains_key(&odd_name) && layout.contains_key(&even_name) {
+            let odd_name  = format!("{}{}", base, odd);
+            if layout.contains_key(&even_name) && !layout.contains_key(&odd_name) {
                 result.insert(odd_name, even_name);
+            } else if layout.contains_key(&odd_name) && !layout.contains_key(&even_name) {
+                result.insert(even_name, odd_name);
             }
         }
     }
@@ -231,8 +238,8 @@ pub fn make_odd_flip_sources(layout: &HashMap<String, LayerList>) -> HashMap<Str
 }
 
 /// 画像編集なしモード時に asset_dir から balloon*.png を収集し、
-/// 奇数番の自動反転対象も含めたバルーン名リストを返す
-pub fn detect_direct_balloons(asset_dir: &Path) -> Vec<String> {
+/// 自動補完対象も含めたバルーン名リストを返す
+pub fn detect_direct_balloons(asset_dir: &Path, auto_flip: bool) -> Vec<String> {
     let pdef_re = re_direct();
 
     let mut found: HashSet<String> = HashSet::new();
@@ -252,39 +259,45 @@ pub fn detect_direct_balloons(asset_dir: &Path) -> Vec<String> {
 
     let mut result = found.clone();
 
-    // balloonk / balloons 系の奇数反転対象を追加
-    for prefix in &["balloonk", "balloons"] {
-        let nums: Vec<u32> = found
-            .iter()
-            .filter_map(|s| s.strip_prefix(prefix).and_then(|r| r.parse().ok()))
-            .collect();
-        if nums.is_empty() { continue; }
-        let max_even = nums.iter().filter(|&&n| n % 2 == 0).copied().max().unwrap_or(0);
-        for even in (0..=max_even).step_by(2) {
-            let even_name = format!("{}{}", prefix, even);
-            let odd_name  = format!("{}{}", prefix, even + 1);
-            if found.contains(&even_name) && !found.contains(&odd_name) {
-                result.insert(odd_name);
+    if auto_flip {
+        // balloonk / balloons 系：偶数→奇数、奇数→偶数の両方向を補完
+        for prefix in &["balloonk", "balloons"] {
+            let nums: Vec<u32> = found
+                .iter()
+                .filter_map(|s| s.strip_prefix(prefix).and_then(|r| r.parse().ok()))
+                .collect();
+            if nums.is_empty() { continue; }
+            let max_num = nums.iter().copied().max().unwrap_or(0);
+            for even in (0..=max_num).step_by(2) {
+                let even_name = format!("{}{}", prefix, even);
+                let odd_name  = format!("{}{}", prefix, even + 1);
+                if found.contains(&even_name) && !found.contains(&odd_name) {
+                    result.insert(odd_name);
+                } else if found.contains(&odd_name) && !found.contains(&even_name) {
+                    result.insert(even_name);
+                }
             }
         }
-    }
 
-    // pdef 系
-    let mut pdef_groups: HashMap<String, Vec<u32>> = HashMap::new();
-    for stem in &found {
-        if let Some(caps) = pdef_re.captures(stem) {
-            let base = caps[1].to_string();
-            let num: u32 = caps[2].parse().unwrap_or(0);
-            pdef_groups.entry(base).or_default().push(num);
+        // pdef 系
+        let mut pdef_groups: HashMap<String, Vec<u32>> = HashMap::new();
+        for stem in &found {
+            if let Some(caps) = pdef_re.captures(stem) {
+                let base = caps[1].to_string();
+                let num: u32 = caps[2].parse().unwrap_or(0);
+                pdef_groups.entry(base).or_default().push(num);
+            }
         }
-    }
-    for (base, nums) in &pdef_groups {
-        let max_even = nums.iter().filter(|&&n| n % 2 == 0).copied().max().unwrap_or(0);
-        for even in (0..=max_even).step_by(2) {
-            let even_name = format!("{}{}", base, even);
-            let odd_name  = format!("{}{}", base, even + 1);
-            if found.contains(&even_name) && !found.contains(&odd_name) {
-                result.insert(odd_name);
+        for (base, nums) in &pdef_groups {
+            let max_num = nums.iter().copied().max().unwrap_or(0);
+            for even in (0..=max_num).step_by(2) {
+                let even_name = format!("{}{}", base, even);
+                let odd_name  = format!("{}{}", base, even + 1);
+                if found.contains(&even_name) && !found.contains(&odd_name) {
+                    result.insert(odd_name);
+                } else if found.contains(&odd_name) && !found.contains(&even_name) {
+                    result.insert(even_name);
+                }
             }
         }
     }

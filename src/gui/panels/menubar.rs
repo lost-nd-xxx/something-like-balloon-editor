@@ -141,13 +141,19 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                     app.rebuild_and_refresh(ctx);
                 }
             });
+            let mut auto_flip = app.state.auto_flip;
+            if ui.checkbox(&mut auto_flip, "奇数・偶数番バルーンを自動補完").changed() {
+                app.state.auto_flip = auto_flip;
+                ui.close_menu();
+                app.reload_asset_folder(ctx);
+            }
         });
 
         // 表示メニュー
         ui.menu_button("表示", |ui| {
             if ui.button("プレビュー更新  (F5)").clicked() {
                 ui.close_menu();
-                app.rebuild_and_refresh(ctx);
+                app.reload_asset_folder_keep_texts(ctx);
             }
             ui.separator();
             if ui.button("ウィンドウレイアウトをリセット").clicked() {

@@ -121,6 +121,8 @@ pub struct AppState {
     // --- レイアウト ---
     pub balloon_layout:     HashMap<String, LayerList>,
     pub direct_image_mode:  bool,
+    /// 奇数・偶数番バルーンの自動補完（反転生成）On/Off
+    pub auto_flip:          bool,
 
     // --- バルーンリスト・選択 ---
     pub preview_balloons:  Vec<String>,   // "balloonk0.png" などの一覧
@@ -262,6 +264,7 @@ impl AppState {
             basic_info:        HashMap::new(),
             balloon_layout:    HashMap::new(),
             direct_image_mode: false,
+            auto_flip:         true,
             preview_balloons:  Vec::new(),
             selected_balloon:  String::new(),
             balloon_cache:     HashMap::new(),

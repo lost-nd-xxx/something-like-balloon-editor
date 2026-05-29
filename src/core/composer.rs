@@ -205,6 +205,7 @@ pub fn build_all_balloons(
     asset_dir: &Path,
     colors: &ColorSet,
     layout: Option<&HashMap<String, LayerList>>,
+    auto_flip: bool,
 ) -> anyhow::Result<HashMap<String, RgbaImage>> {
     let owned;
     let layout = match layout {
@@ -222,14 +223,14 @@ pub fn build_all_balloons(
         results.insert(format!("{}.png", bname), img);
     }
 
-    // 奇数バルーン: files.txt に記述がないものは偶数番を反転して生成
-    let odd_flip = make_odd_flip_sources(layout);
-    for (odd, even) in &odd_flip {
-        if !layout.contains_key(odd) {
-            let even_key = format!("{}.png", even);
-            if let Some(even_img) = results.get(&even_key) {
-                let flipped = flip_horizontal(even_img);
-                results.insert(format!("{}.png", odd), flipped);
+    // 自動補完: files.txt に記述がないものを反転して生成（両方向）
+    let odd_flip = make_odd_flip_sources(layout, auto_flip);
+    for (target, source) in &odd_flip {
+        if !layout.contains_key(target) {
+            let source_key = format!("{}.png", source);
+            if let Some(source_img) = results.get(&source_key) {
+                let flipped = flip_horizontal(source_img);
+                results.insert(format!("{}.png", target), flipped);
             }
         }
     }

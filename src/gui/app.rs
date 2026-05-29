@@ -1313,7 +1313,7 @@ impl eframe::App for BalloonEditorApp {
             else                 { self.refresh_preview_texture(ctx); }
             ctx.memory_mut(|m| m.reset_areas());
         }
-        if keys.refresh { self.rebuild_and_refresh(ctx); }
+        if keys.refresh { self.reload_asset_folder_keep_texts(ctx); }
 
         // メニューバー
         egui::TopBottomPanel::top("menubar").show(ctx, |ui| {
