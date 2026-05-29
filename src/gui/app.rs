@@ -155,8 +155,8 @@ impl BalloonEditorApp {
                 crate::gui::state::PreviewTextMode::A => PreviewMode::A,
                 crate::gui::state::PreviewTextMode::B => PreviewMode::B,
             },
-            show_overlay: self.state.overlay_mode == "layout",
             is_balloonc:  self.state.is_balloonc(),
+            show_overlay: self.state.overlay_mode == "layout" && !self.state.is_balloonc(),
             balloon_name: self.state.selected_balloon.clone(),
             asset_dir:    self.state.asset_dir(),
         };
@@ -340,12 +340,17 @@ impl BalloonEditorApp {
         let path = asset_dir.join(name);
         let stem = name.trim_end_matches(".png");
         let pna_path = asset_dir.join(format!("{}.pna", stem));
+        let cfg_path = asset_dir.join(format!("{}s.txt", stem));
         let has_pna = pna_path.exists();
+        let has_cfg = cfg_path.exists();
 
-        let desc = if has_pna {
-            format!("「{}」および「{}.pna」をゴミ箱に移動しますか？", name, stem)
-        } else {
+        let mut extras = Vec::new();
+        if has_pna { extras.push(format!("{}.pna", stem)); }
+        if has_cfg { extras.push(format!("{}s.txt", stem)); }
+        let desc = if extras.is_empty() {
             format!("「{}」をゴミ箱に移動しますか？", name)
+        } else {
+            format!("「{}」および「{}」をゴミ箱に移動しますか？", name, extras.join("」「"))
         };
 
         let confirmed = rfd::MessageDialog::new()
@@ -361,6 +366,11 @@ impl BalloonEditorApp {
             if has_pna {
                 if let Err(e) = trash::delete(&pna_path) {
                     self.err(format!("{}.pna の削除に失敗しました:\n{}", stem, e));
+                }
+            }
+            if has_cfg {
+                if let Err(e) = trash::delete(&cfg_path) {
+                    self.err(format!("{}s.txt の削除に失敗しました:\n{}", stem, e));
                 }
             }
             // 削除後は next_reload フラグを立てておく（ctx がここでは使えないため）
@@ -1084,8 +1094,20 @@ impl eframe::App for BalloonEditorApp {
                             if proceed {
                                 match crate::core::project::create_project_from_folder(&src, &name_trimmed) {
                                     Ok(dir) => {
+                                        // blendmethod 警告チェック
+                                        let bm_warns = crate::core::project::check_blendmethod_warnings(&dir);
                                         self.state.selected_asset_dir = Some(dir);
                                         self.reload_asset_folder(ctx);
+                                        if !bm_warns.is_empty() {
+                                            self.dialog = Some((
+                                                "blendmethod 警告".into(),
+                                                format!(
+                                                    "以下の blendmethod 設定はこのアプリでは再現できません。\n\
+                                                     SSPでの表示と異なる場合があります。\n\n{}",
+                                                    bm_warns.join("\n")
+                                                ),
+                                            ));
+                                        }
                                         close = true;
                                     }
                                     Err(e) => {

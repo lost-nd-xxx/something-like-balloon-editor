@@ -173,6 +173,8 @@ pub struct AppState {
     // --- ドラッグ位置編集 ---
     pub drag_edit_target: Option<DragEditTarget>,
     pub drag_state:       Option<DragState>,
+    /// ValidRect/CommunicateBox 編集開始前の overlay_mode（編集終了時に復元）
+    pub overlay_before_drag_edit: Option<String>,
 
     // --- 読み込み時警告 ---
     /// 素材フォルダ読み込み時に蓄積された警告メッセージ。呼び出し元がダイアログ表示後クリアする。
@@ -300,6 +302,7 @@ impl AppState {
             dynamic_defaults:  HashMap::new(),
             drag_edit_target:  None,
             drag_state:        None,
+            overlay_before_drag_edit: None,
             load_warnings:     Vec::new(),
 
             // --- プロジェクト新規作成UI ---

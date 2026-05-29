@@ -1,7 +1,7 @@
 use egui::{Context, ScrollArea, Ui};
 use crate::gui::app::BalloonEditorApp;
 use crate::gui::field_def::{
-    ACCORDION_GROUPS, FieldType, GroupVisibility,
+    ACCORDION_GROUPS, DECORATION_GROUPS, FieldType, GroupVisibility,
 };
 use crate::core::descript::{
     parse_descript, set_descript_value, get_color_from_descript, set_color_in_descript,
@@ -26,7 +26,7 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                         show_accordion_settings(ui, app, ctx);
                     });
                 ui.separator();
-                show_drag_edit_section(ui, app);
+                show_drag_edit_section(ui, app, ctx);
             }
         });
     });
@@ -145,6 +145,48 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
         egui::CollapsingHeader::new(group.name)
             .default_open(false)
             .show(ui, |ui| {
+                // 装飾なしチェックボックスを持つグループか判定
+                let deco_group = DECORATION_GROUPS.iter()
+                    .find(|(name, _, _)| *name == group.name);
+
+                // 装飾なし判定: blendmethod キーが "none" のとき装飾なし
+                let decoration_off = if let Some((_, blend_key, _)) = deco_group {
+                    let descript_text = if use_individual {
+                        app.state.individual_texts.get(&cfg_key).cloned().unwrap_or_default()
+                    } else {
+                        app.state.descript_text.clone()
+                    };
+                    is_decoration_off(&descript_text, blend_key)
+                } else {
+                    false
+                };
+
+                if let Some((_, blend_key, keys)) = deco_group {
+                    let mut checked = decoration_off;
+                    if ui.checkbox(&mut checked, "装飾なし").changed() {
+                        app.state.push_undo();
+                        let mut descript_text = if use_individual {
+                            app.state.individual_texts.get(&cfg_key).cloned().unwrap_or_default()
+                        } else {
+                            app.state.descript_text.clone()
+                        };
+                        if checked {
+                            // blendmethod を none に、style/色を装飾なし値に設定
+                            descript_text = set_descript_value(&descript_text, blend_key, "none");
+                            for (key, _on_default, off_val) in *keys {
+                                descript_text = set_descript_value(&descript_text, key, off_val);
+                            }
+                        } else {
+                            // blendmethod を copypen に、style/色をデフォルト値に設定
+                            descript_text = set_descript_value(&descript_text, blend_key, "copypen");
+                            for (key, on_default, _off_val) in *keys {
+                                descript_text = set_descript_value(&descript_text, key, on_default);
+                            }
+                        }
+                        write_back(app, ctx, &cfg_key, use_individual, descript_text);
+                    }
+                }
+
                 egui::Grid::new(group.name)
                     .num_columns(2)
                     .spacing([8.0, 4.0])
@@ -155,6 +197,9 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                                 let shadow_color_key = field.key.trim_end_matches("style").to_string() + "color.r";
                                 let v = resolve_field_value(app, &shadow_color_key, &cfg_key, use_individual);
                                 v.to_lowercase() != "none"
+                            } else if deco_group.is_some() {
+                                // 装飾なしのグループは全フィールドをグレーアウト
+                                !decoration_off
                             } else {
                                 true
                             };
@@ -541,7 +586,7 @@ fn color32_to_rgb(c: egui::Color32) -> Rgb {
 // 位置編集セクション
 // ---------------------------------------------------------------------------
 
-fn show_drag_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp) {
+fn show_drag_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &egui::Context) {
     egui::CollapsingHeader::new("位置編集")
         .default_open(false)
         .show(ui, |ui| {
@@ -574,13 +619,14 @@ fn show_drag_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp) {
                                                           all_entries.push(("カウンタ数値",   DragEditTarget::Counter));
                 if parts.contains_key("online0.png")   { all_entries.push(("オンライン",     DragEditTarget::OnlineMarker)); }
             }
-            show_drag_entry_list(ui, app, all_entries, &parts);
+            show_drag_entry_list(ui, app, ctx, all_entries, &parts);
         });
 }
 
 fn show_drag_entry_list(
     ui: &mut Ui,
     app: &mut BalloonEditorApp,
+    ctx: &egui::Context,
     entries: Vec<(&str, DragEditTarget)>,
     _parts: &std::collections::HashMap<String, image::RgbaImage>,
 ) {
@@ -595,16 +641,42 @@ fn show_drag_entry_list(
                     if ui.button(egui::RichText::new("編集終了").color(egui::Color32::from_rgb(255, 160, 50))).clicked() {
                         app.state.drag_edit_target = None;
                         app.state.drag_state = None;
+                        // 編集開始前の overlay_mode を復元
+                        if let Some(prev) = app.state.overlay_before_drag_edit.take() {
+                            if app.state.overlay_mode != prev {
+                                app.state.overlay_mode = prev;
+                                app.refresh_preview_texture(ctx);
+                            }
+                        }
                     }
                 } else {
                     if ui.button("編集開始").clicked() {
-                        app.state.drag_edit_target = Some(target);
+                        app.state.drag_edit_target = Some(target.clone());
                         app.state.drag_state = None;
+                        // ValidRect/CommunicateBox 編集開始時はオーバーレイを自動ON
+                        if matches!(target, DragEditTarget::ValidRect | DragEditTarget::CommunicateBox) {
+                            if app.state.overlay_mode != "layout" {
+                                app.state.overlay_before_drag_edit = Some(app.state.overlay_mode.clone());
+                                app.state.overlay_mode = "layout".to_string();
+                                app.refresh_preview_texture(ctx);
+                            } else {
+                                app.state.overlay_before_drag_edit = None;
+                            }
+                        }
                     }
                 }
                 ui.end_row();
             }
         });
+}
+
+/// blendmethod キーの値が "none" なら装飾なし
+fn is_decoration_off(text: &str, blend_key: &str) -> bool {
+    use regex::Regex;
+    let pat = Regex::new(&format!(r"(?m)^{},(.+)$", regex::escape(blend_key))).unwrap();
+    pat.captures(text)
+        .map(|c| c[1].trim().to_lowercase() == "none")
+        .unwrap_or(false)
 }
 
 /// 選択中バルーンが個別設定を持てるかどうかを判定する。

@@ -882,14 +882,37 @@ fn draw_sample_text(
     let shadow_style = parsed.get("font.shadowstyle").map(|s| s.as_str()).unwrap_or("offset");
     let shadow = shadow_color.map(|sc| (sc, shadow_style.contains("outline")));
 
+    // blendmethod キーが存在しかつ "none" 以外のとき装飾あり
+    let blend_active = |key: &str| -> bool {
+        parsed.get(key)
+            .map(|s| s.trim().to_lowercase() != "none")
+            .unwrap_or(false)
+    };
+    let cursor_ns_deco  = blend_active("cursor.notselect.blendmethod");
+    let cursor_deco     = blend_active("cursor.blendmethod");
+    let anchor_ns_deco  = blend_active("anchor.notselect.blendmethod");
+    let anchor_deco     = blend_active("anchor.blendmethod");
+    let anchor_vis_deco = blend_active("anchor.visited.blendmethod");
+
     // 各色
     let font_color        = get_color(parsed, "font.color").unwrap_or(Rgb(0,0,0));
     let disable_color     = get_color(parsed, "disable.font.color").unwrap_or(Rgb(128,128,128));
-    let choice_color      = get_color(parsed, "cursor.notselect.font.color").unwrap_or(Rgb(0,0,255));
-    let choice_sel_color  = get_color(parsed, "cursor.font.color").unwrap_or(Rgb(255,255,255));
-    let anchor_color      = get_color(parsed, "anchor.notselect.font.color").unwrap_or(Rgb(0,0,255));
-    let anchor_sel_color  = get_color(parsed, "anchor.font.color").unwrap_or(Rgb(0,0,255));
-    let anchor_vis_color  = get_color(parsed, "anchor.visited.font.color").unwrap_or(Rgb(170,0,170));
+    // 装飾なし（blendmethod=none）のとき文字色は通常文字色を使う
+    // 色値 -1 は「透明/無効」扱いのため通常色にフォールバック
+    let resolve_color = |key: &str, fallback: Rgb| -> Rgb {
+        get_color(parsed, key)
+            .filter(|&Rgb(r, g, b)| !(r == 255 && g == 255 && b == 255 && {
+                // -1 は parse_descript で u8 にならないが念のため font_color にフォールバック
+                false
+            }))
+            .unwrap_or(fallback)
+    };
+    // -1 指定の色は get_color が None を返す（r.g.b それぞれ -1 は 0～255 外）ので font_color になる
+    let choice_color     = if !cursor_ns_deco { font_color } else { resolve_color("cursor.notselect.font.color", Rgb(0,0,255)) };
+    let choice_sel_color = if !cursor_deco    { font_color } else { resolve_color("cursor.font.color",           Rgb(255,255,255)) };
+    let anchor_color     = if !anchor_ns_deco { font_color } else { resolve_color("anchor.notselect.font.color", Rgb(0,0,255)) };
+    let anchor_sel_color = if !anchor_deco    { font_color } else { resolve_color("anchor.font.color",           Rgb(0,0,255)) };
+    let anchor_vis_color = if !anchor_vis_deco{ font_color } else { resolve_color("anchor.visited.font.color",   Rgb(170,0,170)) };
 
     let cursor_brush      = get_color(parsed, "cursor.brush.color").unwrap_or(Rgb(0,0,255));
     let cursor_pen        = get_color(parsed, "cursor.pen.color").unwrap_or(Rgb(0,0,0));
@@ -916,11 +939,11 @@ fn draw_sample_text(
         let v = parsed.get(key).map(|s| s.as_str()).unwrap_or(default).to_lowercase();
         (v.contains("square"), v.contains("underline"))
     };
-    let (cursor_rect,     cursor_ul)     = parse_style("cursor.style");
-    let (anchor_rect,     anchor_ul)     = parse_style("anchor.style");
-    let (anchor_vis_rect, anchor_vis_ul) = parse_style("anchor.visited.style");
-    let (cursor_ns_rect,  cursor_ns_ul)  = parse_style("cursor.notselect.style");
-    let (anchor_ns_rect,  anchor_ns_ul)  = parse_style("anchor.notselect.style");
+    let (cursor_ns_rect,  cursor_ns_ul)  = if !cursor_ns_deco  { (false, false) } else { parse_style("cursor.notselect.style") };
+    let (cursor_rect,     cursor_ul)     = if !cursor_deco     { (false, false) } else { parse_style("cursor.style") };
+    let (anchor_ns_rect,  anchor_ns_ul)  = if !anchor_ns_deco  { (false, false) } else { parse_style("anchor.notselect.style") };
+    let (anchor_rect,     anchor_ul)     = if !anchor_deco     { (false, false) } else { parse_style("anchor.style") };
+    let (anchor_vis_rect, anchor_vis_ul) = if !anchor_vis_deco { (false, false) } else { parse_style("anchor.visited.style") };
 
     // GDI フォントの internal leading（字形上端より上の余白）
     // square/underline の描画位置をグリフの実描画範囲に合わせるために使う
@@ -948,8 +971,11 @@ fn draw_sample_text(
         ("訪問済みのアンカー", 6),
     ];
 
-    let text_x = vr.left;
-    let mut text_y = vr.top;
+    // origin.x/y: テキスト開始位置のオフセット（validrect 左上に加算）
+    let origin_x: i32 = parsed.get("origin.x").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let origin_y: i32 = parsed.get("origin.y").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let text_x = vr.left + origin_x;
+    let mut text_y = vr.top + origin_y;
 
     // サンプルテキスト行頭マーカー: marker.png → markers.png の順でフォールバック（sstp.png は使わない）
     let marker_img = cache.get("marker.png").or_else(|| cache.get("markers.png"));
@@ -1079,6 +1105,15 @@ fn draw_overlay(
             draw_vline_dashed(img, wwx, t, b, Rgb(180,180,180), Rgb(100,100,100));
         } else {
             draw_overlay_vline(img, wwx, t, b, white, red);
+        }
+
+        // origin.x/y が 0 以外のとき、テキスト実開始点を緑の十字で表示
+        let origin_x: i32 = parsed.get("origin.x").and_then(|s| s.parse().ok()).unwrap_or(0);
+        let origin_y: i32 = parsed.get("origin.y").and_then(|s| s.parse().ok()).unwrap_or(0);
+        if origin_x != 0 || origin_y != 0 {
+            let tx = vr.left + origin_x;
+            let ty = vr.top  + origin_y;
+            draw_cross(img, tx, ty, Rgb(0, 200, 0), Rgb(0, 200, 0));
         }
     }
 }
