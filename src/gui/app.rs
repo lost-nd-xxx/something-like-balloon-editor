@@ -36,10 +36,10 @@ impl BalloonEditorApp {
 
         let mut state = AppState::new();
 
-        // 起動時の状態復元
+        // 起動時の状態復元（アプリ固有状態 state.json）
         let state_path = root.join("state.json");
-        let has_profile = if let Some(profile) = crate::core::profile::load_state(&state_path) {
-            apply_profile_to_state(&mut state, &profile);
+        let has_config = if let Some(config) = crate::core::profile::load_app_config(&state_path) {
+            apply_app_config_to_state(&mut state, &config);
             true
         } else {
             false
@@ -56,15 +56,27 @@ impl BalloonEditorApp {
             preview_result: Arc::new(Mutex::new(None)),
         };
 
-        // 素材フォルダを初期読み込み
-        // プロファイルがある場合はテキストを上書きしない（編集済み内容を保持）
-        let load_result = if has_profile {
-            load_asset_folder_keep_texts(&mut app.state, &app.root)
-        } else {
-            load_asset_folder(&mut app.state, &app.root)
-        };
-        if let Err(e) = load_result {
-            app.dialog = Some(("エラー".into(), format!("素材フォルダの読み込みに失敗しました:\n\n{}", e)));
+        // 素材フォルダを初期読み込み（txt が正本のため常にフォルダから読む）
+        let _ = has_config;
+        match load_asset_folder(&mut app.state, &app.root) {
+            Ok(_) => {
+                // プロジェクトフォルダなら色設定を slbe_profile.json から復元
+                if app.state.is_project_dir() {
+                    if let Some(asset_dir) = app.state.asset_dir() {
+                        let profile_path = crate::core::profile::project_profile_path(&asset_dir);
+                        if let Ok(profile) = crate::core::profile::load_project_profile(&profile_path) {
+                            apply_project_profile_to_state(&mut app.state, &profile);
+                        }
+                    }
+                }
+                // descript / install から基本情報を再構築
+                app.rebuild_basic_info();
+                // 起動時の警告（name 食い違い・文字コード等）を表示する
+                app.flush_load_warnings();
+            }
+            Err(e) => {
+                app.dialog = Some(("エラー".into(), format!("素材フォルダの読み込みに失敗しました:\n\n{}", e)));
+            }
         }
 
         app
@@ -198,34 +210,48 @@ impl BalloonEditorApp {
         self.dialog = Some(("エラー".into(), msg.into()));
     }
 
+    /// 未保存確認ダイアログ通過後の保留アクションを実行する
+    fn run_pending_action(&mut self, action: crate::gui::state::PendingAction, ctx: &Context) {
+        use crate::gui::state::PendingAction;
+        match action {
+            PendingAction::OpenProject(name) => self.do_open_project(&name, ctx),
+            PendingAction::Quit => {
+                self.state.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    /// プロジェクトを実際に開く（未保存チェックは呼び出し側で済ませる前提）
+    pub fn do_open_project(&mut self, name: &str, ctx: &Context) {
+        if let Ok(dir) = crate::core::project::get_project_dir(name) {
+            self.state.selected_asset_dir = Some(dir);
+            // 開き直す前に未保存フラグをクリア。
+            // reload 内の rebuild_basic_info が name 食い違いを検出した場合は
+            // その場で dirty=true が立つため、ここでクリアしておく順序にする。
+            self.state.dirty = false;
+            self.reload_asset_folder(ctx);
+        }
+    }
+
     pub fn reload_asset_folder(&mut self, ctx: &Context) {
         // 素材フォルダを切り替えたとき基本情報もリセットする
         self.state.basic_info.clear();
         match load_asset_folder(&mut self.state, &self.root.clone()) {
             Ok(_) => {
-                // プロジェクトフォルダなら profile.json があれば色設定を自動復元
+                // プロジェクトフォルダなら slbe_profile.json があれば色設定を自動復元
                 // （テキスト類はフォルダから読んだものを優先するため上書きしない）
                 if self.state.is_project_dir() {
                     if let Some(asset_dir) = self.state.asset_dir() {
-                        let profile_path = asset_dir.join("profile.json");
-                        if let Ok(profile) = crate::core::profile::load_profile(&profile_path) {
+                        let profile_path = crate::core::profile::project_profile_path(&asset_dir);
+                        if let Ok(profile) = crate::core::profile::load_project_profile(&profile_path) {
                             apply_project_profile_to_state(&mut self.state, &profile);
                         }
                     }
                 }
 
-                // descript から基本情報を再構築
-                use crate::core::descript::parse_descript;
-                let parsed_d = parse_descript(&self.state.descript_text);
-                let parsed_i = parse_descript(&self.state.install_text);
-                for key in &["name","craftman","craftmanw","craftmanurl","homeurl"] {
-                    if let Some(v) = parsed_d.get(*key) {
-                        self.state.basic_info.insert(key.to_string(), v.clone());
-                    }
-                }
-                if let Some(v) = parsed_i.get("directory") {
-                    self.state.basic_info.insert("directory".to_string(), v.clone());
-                }
+                // descript / install から基本情報を再構築
+                self.rebuild_basic_info();
                 self.refresh_preview_texture(ctx);
                 self.flush_load_warnings();
             }
@@ -237,19 +263,8 @@ impl BalloonEditorApp {
     pub fn reload_asset_folder_keep_texts(&mut self, ctx: &Context) {
         match load_asset_folder_keep_texts(&mut self.state, &self.root.clone()) {
             Ok(_) => {
-                // プロファイルのテキストから基本情報を再構築
-                use crate::core::descript::parse_descript;
-                let parsed_d = parse_descript(&self.state.descript_text);
-                let parsed_i = parse_descript(&self.state.install_text);
-                self.state.basic_info.clear();
-                for key in &["name","craftman","craftmanw","craftmanurl","homeurl"] {
-                    if let Some(v) = parsed_d.get(*key) {
-                        self.state.basic_info.insert(key.to_string(), v.clone());
-                    }
-                }
-                if let Some(v) = parsed_i.get("directory") {
-                    self.state.basic_info.insert("directory".to_string(), v.clone());
-                }
+                // テキストから基本情報を再構築
+                self.rebuild_basic_info();
                 self.refresh_preview_texture(ctx);
                 self.flush_load_warnings();
             }
@@ -378,6 +393,44 @@ impl BalloonEditorApp {
         }
     }
 
+    /// descript.txt / install.txt から基本情報（basic_info）を再構築する。
+    /// name は descript / install の双方に存在しうるため、食い違いを検出したら
+    /// 警告を出した上で descript 側の値を採用する。
+    fn rebuild_basic_info(&mut self) {
+        use crate::core::descript::parse_descript;
+        let parsed_d = parse_descript(&self.state.descript_text);
+        let parsed_i = parse_descript(&self.state.install_text);
+
+        self.state.basic_info.clear();
+        for key in &["name", "craftman", "craftmanw", "craftmanurl", "homeurl"] {
+            if let Some(v) = parsed_d.get(*key) {
+                self.state.basic_info.insert(key.to_string(), v.clone());
+            }
+        }
+        if let Some(v) = parsed_i.get("directory") {
+            self.state.basic_info.insert("directory".to_string(), v.clone());
+        }
+
+        // name の食い違いを検出（descript と install の双方に name がある場合）
+        if let (Some(nd), Some(ni)) = (parsed_d.get("name"), parsed_i.get("name")) {
+            if nd != ni {
+                let nd = nd.clone();
+                let ni = ni.clone();
+                self.state.load_warnings.push(format!(
+                    "descript.txt と install.txt の name が食い違っています。\n\
+                     descript.txt: \"{nd}\"\n\
+                     install.txt: \"{ni}\"\n\
+                     descript.txt 側の値を採用します。"
+                ));
+                // descript 側を採用 → install_text も合わせて未保存状態にする
+                // （採用結果が保存されないまま終了できてしまうのを防ぐ）
+                self.state.install_text =
+                    crate::core::descript::set_descript_value(&self.state.install_text, "name", &nd);
+                self.state.dirty = true;
+            }
+        }
+    }
+
     /// load_warnings が溜まっていればダイアログに表示してクリアする
     fn flush_load_warnings(&mut self) {
         if self.state.load_warnings.is_empty() { return; }
@@ -408,7 +461,7 @@ impl BalloonEditorApp {
     }
 
     /// プロファイルをファイルダイアログで保存する
-    /// プロジェクトに保存（descript.txt / install.txt の書き出し + profile.json の保存）
+    /// プロジェクトに保存（descript.txt / install.txt の書き出し + profile/slbe_profile.json の保存）
     pub fn save_project(&mut self) {
         let Some(asset_dir) = self.state.asset_dir() else {
             self.err("プロジェクトが選択されていません。");
@@ -431,12 +484,47 @@ impl BalloonEditorApp {
             return;
         }
 
-        // profile.json を保存
-        let profile_path = asset_dir.join("profile.json");
-        let profile = build_profile_from_state(&self.state);
-        if let Err(e) = crate::core::profile::save_profile(&profile_path, &profile) {
-            self.err(format!("プロファイルの保存に失敗しました:\n{}", e));
+        // 個別設定ファイル（{バルーン名}s.txt）を書き出す。
+        // - individual_texts に非空エントリがあれば書き出す（txt が正本）
+        // - 空 / 未定義になった項目は、ディスク上の {stem}s.txt を削除して古い設定を残さない
+        for balloon_name in &self.state.preview_balloons {
+            let stem = balloon_name.trim_end_matches(".png");
+            let cfg_name = format!("{}s.txt", stem);
+            let cfg_path = asset_dir.join(&cfg_name);
+            match self.state.individual_texts.get(&cfg_name) {
+                Some(text) if !text.trim().is_empty() => {
+                    // descript からの差分のみに圧縮して保存（個別設定ファイル仕様）
+                    let diff = crate::core::descript::diff_against_descript(
+                        text, &self.state.descript_text);
+                    if diff.trim().is_empty() {
+                        // 差分が無ければ個別設定として保持する意味がない → 既存ファイルを削除
+                        if cfg_path.exists() {
+                            let _ = std::fs::remove_file(&cfg_path);
+                        }
+                    } else if let Err(e) = std::fs::write(&cfg_path, &diff) {
+                        self.err(format!("{} の保存に失敗しました:\n{}", cfg_name, e));
+                        return;
+                    }
+                }
+                _ => {
+                    // 空 / 未定義 → 既存ファイルがあれば削除
+                    if cfg_path.exists() {
+                        let _ = std::fs::remove_file(&cfg_path);
+                    }
+                }
+            }
         }
+
+        // 色設定を profile/slbe_profile.json に保存
+        let profile_path = crate::core::profile::project_profile_path(&asset_dir);
+        let profile = build_project_profile_from_state(&self.state);
+        if let Err(e) = crate::core::profile::save_project_profile(&profile_path, &profile) {
+            self.err(format!("プロファイルの保存に失敗しました:\n{}", e));
+            return;
+        }
+
+        // 保存成功 → 未保存フラグをクリア
+        self.state.dirty = false;
     }
 
     /// 現在のプロジェクトを別名のプロジェクトとしてコピー保存する
@@ -460,36 +548,6 @@ impl BalloonEditorApp {
             }
             Err(e) => {
                 self.err(format!("別名で保存エラー: {}", e));
-            }
-        }
-    }
-
-    pub fn save_profile_dialog(&mut self) {
-        let path = rfd::FileDialog::new()
-            .set_title("プロファイルを保存")
-            .add_filter("JSONファイル", &["json"])
-            .save_file();
-        if let Some(path) = path {
-            let profile = build_profile_from_state(&self.state);
-            if let Err(e) = crate::core::profile::save_profile(&path, &profile) {
-                self.err(format!("プロファイルの保存に失敗しました:\n{}", e));
-            }
-        }
-    }
-
-    /// プロファイルをファイルダイアログで読み込む
-    pub fn load_profile_dialog(&mut self, ctx: &Context) {
-        let path = rfd::FileDialog::new()
-            .set_title("プロファイルを読み込み")
-            .add_filter("JSONファイル", &["json"])
-            .pick_file();
-        if let Some(path) = path {
-            match crate::core::profile::load_profile(&path) {
-                Ok(profile) => {
-                    apply_profile_to_state(&mut self.state, &profile);
-                    self.reload_asset_folder_keep_texts(ctx);
-                }
-                Err(e) => self.err(format!("プロファイルの読み込みに失敗しました:\n{}", e)),
             }
         }
     }
@@ -830,6 +888,21 @@ impl BalloonEditorApp {
 
 impl eframe::App for BalloonEditorApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        // ウィンドウ「×」やショートカットによる終了要求をインターセプトする。
+        // 未保存編集があり、まだ終了許可が出ていなければ閉じるのを取り消して確認ダイアログを出す。
+        if ctx.input(|i| i.viewport().close_requested()) && !self.state.allow_close {
+            if self.state.dirty {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                if self.state.pending_unsaved_action.is_none() {
+                    self.state.pending_unsaved_action =
+                        Some(crate::gui::state::PendingAction::Quit);
+                }
+            } else {
+                // 未保存なし → そのまま閉じてよい
+                self.state.allow_close = true;
+            }
+        }
+
         // 削除後などの遅延リロード
         if self.state.pending_reload {
             self.state.pending_reload = false;
@@ -961,15 +1034,72 @@ impl eframe::App for BalloonEditorApp {
                 });
 
             if let Some(name) = open_name {
-                if let Ok(dir) = crate::core::project::get_project_dir(&name) {
-                    self.state.selected_asset_dir = Some(dir);
-                    self.reload_asset_folder(ctx);
+                if self.state.dirty {
+                    // 未保存編集あり → 確認ダイアログを経由する
+                    self.state.pending_unsaved_action =
+                        Some(crate::gui::state::PendingAction::OpenProject(name));
+                } else {
+                    self.do_open_project(&name, ctx);
                 }
             }
             if close {
                 self.state.show_open_project_window = false;
                 self.state.open_project_selected = None;
                 self.state.open_project_filter.clear();
+            }
+        }
+
+        // 未保存編集の確認ダイアログ
+        if self.state.pending_unsaved_action.is_some() {
+            use crate::gui::state::PendingAction;
+            #[derive(PartialEq)]
+            enum Choice { None, Save, Discard, Cancel }
+            let mut choice = Choice::None;
+
+            // 保留アクションごとに文言を切り替える
+            let is_quit = matches!(self.state.pending_unsaved_action, Some(PendingAction::Quit));
+            let (message, save_label, discard_label) = if is_quit {
+                ("保存していない変更があります。\n保存して終了しますか？", "保存して終了", "保存せず終了")
+            } else {
+                ("保存していない変更があります。\n保存しますか？", "保存して続行", "保存せず続行")
+            };
+
+            egui::Window::new("未保存の変更")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(ctx, |ui| {
+                    ui.label(message);
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button(save_label).clicked()    { choice = Choice::Save; }
+                        if ui.button(discard_label).clicked() { choice = Choice::Discard; }
+                        if ui.button("キャンセル").clicked()  { choice = Choice::Cancel; }
+                    });
+                });
+
+            match choice {
+                Choice::Save => {
+                    self.save_project();
+                    // 保存に失敗した場合は dirty が残るので続行しない
+                    if !self.state.dirty {
+                        if let Some(action) = self.state.pending_unsaved_action.take() {
+                            self.run_pending_action(action, ctx);
+                        }
+                    } else {
+                        self.state.pending_unsaved_action = None;
+                    }
+                }
+                Choice::Discard => {
+                    if let Some(action) = self.state.pending_unsaved_action.take() {
+                        self.state.dirty = false;
+                        self.run_pending_action(action, ctx);
+                    }
+                }
+                Choice::Cancel => {
+                    self.state.pending_unsaved_action = None;
+                }
+                Choice::None => {}
             }
         }
 
@@ -1574,16 +1704,16 @@ impl eframe::App for BalloonEditorApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        // 終了時に状態を保存
+        // 終了時にアプリ固有状態を state.json へ保存
         let state_path = self.root.join("state.json");
-        let profile = build_profile_from_state(&self.state);
-        let _ = crate::core::profile::save_profile(&state_path, &profile);
+        let config = build_app_config_from_state(&self.state);
+        let _ = crate::core::profile::save_app_config(&state_path, &config);
     }
 }
 
-/// Profile → AppState に色設定のみ適用する（プロジェクト読み込み時用）
+/// ProjectProfile → AppState に色設定を適用する（プロジェクト読み込み時用）
 /// テキスト類・asset_dir はフォルダから読んだものを優先するため上書きしない
-fn apply_project_profile_to_state(state: &mut AppState, profile: &crate::core::profile::Profile) {
+fn apply_project_profile_to_state(state: &mut AppState, profile: &crate::core::profile::ProjectProfile) {
     use crate::gui::state::LAYER_DEFS;
 
     for &(key, _, default) in LAYER_DEFS {
@@ -1619,19 +1749,12 @@ fn apply_project_profile_to_state(state: &mut AppState, profile: &crate::core::p
 
     state.no_balloon_color = profile.no_balloon_color;
     state.bulk_color_mode  = profile.bulk_color_mode;
-    state.selected_balloon = if !profile.selected_balloon.is_empty() {
-        profile.selected_balloon.clone()
-    } else {
-        state.selected_balloon.clone()
-    };
 }
 
-/// Profile → AppState に適用する
-fn apply_profile_to_state(state: &mut AppState, profile: &crate::core::profile::Profile) {
-    use crate::gui::state::LAYER_DEFS;
-
-    if !profile.asset_dir.is_empty() {
-        let p = std::path::PathBuf::from(&profile.asset_dir);
+/// AppConfig → AppState にアプリ固有状態を適用する（起動時）
+fn apply_app_config_to_state(state: &mut AppState, config: &crate::core::profile::AppConfig) {
+    if !config.asset_dir.is_empty() {
+        let p = std::path::PathBuf::from(&config.asset_dir);
         // プロジェクトフォルダ以外は復元しない（旧「素材フォルダを選択」で保存されたパス対策）
         let is_project = crate::core::project::get_projects_base_dir()
             .map(|base| p.starts_with(&base))
@@ -1641,72 +1764,55 @@ fn apply_profile_to_state(state: &mut AppState, profile: &crate::core::profile::
         }
     }
 
-    for &(key, _, default) in LAYER_DEFS {
-        let color = profile.layer_color(key, default);
-        state.layer_colors.insert(key.to_string(), color);
-    }
-
-    let default_parts = state.layer_colors.get("parts").copied()
-        .unwrap_or(crate::core::color::Rgb(29, 106, 184));
-    state.parts_colors = if profile.parts_colors.is_empty() {
-        let mut m = std::collections::HashMap::new();
-        m.insert("all".to_string(), default_parts);
-        m
-    } else {
-        profile.parts_colors
-            .iter()
-            .map(|(k, &[r, g, b])| (k.clone(), crate::core::color::Rgb(r, g, b)))
-            .collect()
+    state.theme = match config.theme.as_str() {
+        "dark" => crate::gui::state::ThemeMode::Dark,
+        _      => crate::gui::state::ThemeMode::Light,
     };
 
-    state.no_balloon_color = profile.no_balloon_color;
-    state.bulk_color_mode  = profile.bulk_color_mode;
-
-    if !profile.descript_text.is_empty() { state.descript_text = profile.descript_text.clone(); }
-    if !profile.install_text.is_empty()  { state.install_text  = profile.install_text.clone(); }
-    state.individual_texts = profile.individual_texts.clone();
-    state.basic_info       = profile.basic_info.clone();
-
-    if !profile.selected_balloon.is_empty() {
-        state.selected_balloon = profile.selected_balloon.clone();
-    }
-
-    state.theme = match profile.theme.as_str() {
-        "light"  => crate::gui::state::ThemeMode::Light,
-        "dark"   => crate::gui::state::ThemeMode::Dark,
-        _        => crate::gui::state::ThemeMode::Light,
-    };
-
-    if profile.panel_left_width  > 0.0 { state.panel_left_width  = profile.panel_left_width; }
-    if profile.panel_right_width > 0.0 { state.panel_right_width = profile.panel_right_width; }
-    if profile.window_size[0]    > 0.0 { state.window_size       = profile.window_size; }
+    if config.panel_left_width  > 0.0 { state.panel_left_width  = config.panel_left_width; }
+    if config.panel_right_width > 0.0 { state.panel_right_width = config.panel_right_width; }
+    if config.window_size[0]    > 0.0 { state.window_size       = config.window_size; }
 }
 
-/// AppState → Profile に変換する
-fn build_profile_from_state(state: &AppState) -> crate::core::profile::Profile {
-    crate::core::profile::Profile {
-        version:        1,
-        asset_dir:      state.selected_asset_dir.as_ref()
-                            .and_then(|p| p.to_str())
-                            .unwrap_or("")
-                            .to_string(),
+/// AppState → ProjectProfile に変換する（色設定 → slbe_profile.json）
+fn build_project_profile_from_state(state: &AppState) -> crate::core::profile::ProjectProfile {
+    use crate::core::profile::IndividualColors;
+    crate::core::profile::ProjectProfile {
+        version:        2,
         layer_colors:   state.layer_colors.iter()
             .map(|(k, &Rgb(r, g, b))| (k.clone(), [r, g, b]))
             .collect(),
         parts_colors:   state.parts_colors.iter()
             .map(|(k, &Rgb(r, g, b))| (k.clone(), [r, g, b]))
             .collect(),
-        individual_colors: Default::default(),
+        individual_colors: state.individual_colors.iter()
+            .map(|(k, ic)| {
+                (k.clone(), IndividualColors {
+                    base: ic.base.map(|Rgb(r, g, b)| [r, g, b]),
+                    edge: ic.edge.map(|Rgb(r, g, b)| [r, g, b]),
+                    text: ic.text.map(|Rgb(r, g, b)| [r, g, b]),
+                    parts_colors: ic.parts_colors.iter()
+                        .map(|(k, &Rgb(r, g, b))| (k.clone(), [r, g, b]))
+                        .collect(),
+                })
+            })
+            .collect(),
         no_balloon_color:  state.no_balloon_color,
         bulk_color_mode:   state.bulk_color_mode,
-        descript_text:     state.descript_text.clone(),
-        install_text:      state.install_text.clone(),
-        individual_texts:  state.individual_texts.clone(),
-        basic_info:        state.basic_info.clone(),
-        selected_balloon:  state.selected_balloon.clone(),
+    }
+}
+
+/// AppState → AppConfig に変換する（アプリ固有状態 → state.json）
+fn build_app_config_from_state(state: &AppState) -> crate::core::profile::AppConfig {
+    crate::core::profile::AppConfig {
+        version:        2,
+        asset_dir:      state.selected_asset_dir.as_ref()
+                            .and_then(|p| p.to_str())
+                            .unwrap_or("")
+                            .to_string(),
         theme: match state.theme {
-            crate::gui::state::ThemeMode::Light  => "light".to_string(),
-            crate::gui::state::ThemeMode::Dark   => "dark".to_string(),
+            crate::gui::state::ThemeMode::Light => "light".to_string(),
+            crate::gui::state::ThemeMode::Dark  => "dark".to_string(),
         },
         panel_left_width:  state.panel_left_width,
         panel_right_width: state.panel_right_width,

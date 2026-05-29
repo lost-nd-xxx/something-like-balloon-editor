@@ -83,6 +83,15 @@ pub enum DragEditTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RectEdge { Top, Bottom, Left, Right }
 
+/// 未保存確認ダイアログを経由して実行する保留アクション
+#[derive(Debug, Clone)]
+pub enum PendingAction {
+    /// projects/ 配下のプロジェクトを開く（プロジェクト名）
+    OpenProject(String),
+    /// アプリを終了する
+    Quit,
+}
+
 /// ドラッグ編集中の状態
 #[derive(Debug, Clone)]
 pub struct DragState {
@@ -194,6 +203,13 @@ pub struct AppState {
     pub show_new_project_window: bool,
     pub new_project_name: String,
     pub new_project_warning: String,
+
+    /// 未保存の編集があるか（dirtyフラグ）。保存/読み込み/新規で false に戻す。
+    pub dirty: bool,
+    /// 未保存確認ダイアログ後に実行する保留アクション
+    pub pending_unsaved_action: Option<PendingAction>,
+    /// 終了確認を通過して実際にウィンドウを閉じてよいか
+    pub allow_close: bool,
 
     // --- プロジェクトを開くUI ---
     pub show_open_project_window: bool,
@@ -322,6 +338,10 @@ impl AppState {
             show_new_project_window: false,
             new_project_name: String::new(),
             new_project_warning: String::new(),
+
+            dirty: false,
+            pending_unsaved_action: None,
+            allow_close: false,
 
             // --- プロジェクトを開くUI ---
             show_open_project_window: false,
@@ -461,6 +481,7 @@ impl AppState {
             self.undo_stack.remove(0);
         }
         self.redo_stack.clear();
+        self.dirty = true;
     }
 
     /// アンドゥを実行する。バルーン画像の再構築が必要なら true を返す。
@@ -471,6 +492,7 @@ impl AppState {
                 || snap.parts_colors != current.parts_colors;
             self.redo_stack.push(current);
             self.apply_snapshot(snap);
+            self.dirty = true;
             needs_rebuild
         } else {
             false
@@ -485,6 +507,7 @@ impl AppState {
                 || snap.parts_colors != current.parts_colors;
             self.undo_stack.push(current);
             self.apply_snapshot(snap);
+            self.dirty = true;
             needs_rebuild
         } else {
             false

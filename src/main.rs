@@ -31,8 +31,8 @@ fn main() -> eframe::Result<()> {
 fn load_window_size() -> Option<[f32; 2]> {
     let root = std::env::current_exe().ok()?;
     let state_path = root.parent()?.join("state.json");
-    let profile = crate::core::profile::load_state(&state_path)?;
-    let [w, h] = profile.window_size;
+    let config = crate::core::profile::load_app_config(&state_path)?;
+    let [w, h] = config.window_size;
     if w > 0.0 && h > 0.0 { Some([w, h]) } else { None }
 }
 
