@@ -60,7 +60,7 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                 let hex_resp = ui.add(
                     egui::TextEdit::singleline(&mut hex_text)
                         .id(hex_id)
-                        .desired_width(58.0)
+                        .desired_width(90.0)
                         .font(egui::TextStyle::Monospace),
                 );
                 if hex_resp.gained_focus() {

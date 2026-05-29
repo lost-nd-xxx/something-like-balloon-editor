@@ -37,7 +37,7 @@ pub const DECORATION_GROUPS: &[(&str, &str, &[(&str, &str, &str)])] = &[
         ("cursor.notselect.brush.color.g","0",     "-1"),
         ("cursor.notselect.brush.color.b","0",     "-1"),
     ]),
-    ("選択中の選択肢", "cursor.blendmethod", &[
+    ("選択肢(選択中)", "cursor.blendmethod", &[
         ("cursor.style",        "square", "none"),
         ("cursor.font.color.r", "255",    "-1"),
         ("cursor.font.color.g", "255",    "-1"),
@@ -61,7 +61,7 @@ pub const DECORATION_GROUPS: &[(&str, &str, &[(&str, &str, &str)])] = &[
         ("anchor.notselect.brush.color.g","0",     "-1"),
         ("anchor.notselect.brush.color.b","0",     "-1"),
     ]),
-    ("選択中のアンカー", "anchor.blendmethod", &[
+    ("アンカー(選択中)", "anchor.blendmethod", &[
         ("anchor.style",        "underline", "none"),
         ("anchor.font.color.r", "0",         "-1"),
         ("anchor.font.color.g", "0",         "-1"),
@@ -73,7 +73,7 @@ pub const DECORATION_GROUPS: &[(&str, &str, &[(&str, &str, &str)])] = &[
         ("anchor.brush.color.g","0",         "-1"),
         ("anchor.brush.color.b","0",         "-1"),
     ]),
-    ("訪問済みのアンカー", "anchor.visited.blendmethod", &[
+    ("アンカー(訪問済み)", "anchor.visited.blendmethod", &[
         ("anchor.visited.style",        "none",  "none"),
         ("anchor.visited.font.color.r", "170",   "-1"),
         ("anchor.visited.font.color.g", "0",     "-1"),
@@ -131,7 +131,7 @@ pub static ACCORDION_GROUPS: &[AccordionGroup] = &[
         ],
     },
     AccordionGroup {
-        name: "選択中の選択肢", visibility: GroupVisibility::Ks,
+        name: "選択肢(選択中)", visibility: GroupVisibility::Ks,
         fields: &[
             fd!("cursor.style",       "強調形状", FieldType::Dropdown, STYLE_CHOICES, "square"),
             fd!("cursor.font.color",  "文字色",   FieldType::Color,    &[], "#ffffff"),
@@ -149,7 +149,7 @@ pub static ACCORDION_GROUPS: &[AccordionGroup] = &[
         ],
     },
     AccordionGroup {
-        name: "選択中のアンカー", visibility: GroupVisibility::Ks,
+        name: "アンカー(選択中)", visibility: GroupVisibility::Ks,
         fields: &[
             fd!("anchor.style",       "強調形状", FieldType::Dropdown, STYLE_CHOICES, "underline"),
             fd!("anchor.font.color",  "文字色",   FieldType::Color,    &[], "#0000ff"),
@@ -158,7 +158,7 @@ pub static ACCORDION_GROUPS: &[AccordionGroup] = &[
         ],
     },
     AccordionGroup {
-        name: "訪問済みのアンカー", visibility: GroupVisibility::Ks,
+        name: "アンカー(訪問済み)", visibility: GroupVisibility::Ks,
         fields: &[
             fd!("anchor.visited.style",       "強調形状", FieldType::Dropdown, STYLE_CHOICES, "none"),
             fd!("anchor.visited.font.color",  "文字色",   FieldType::Color,    &[], "#aa00aa"),

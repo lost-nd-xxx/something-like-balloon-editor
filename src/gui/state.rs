@@ -176,6 +176,16 @@ pub struct AppState {
     /// ValidRect/CommunicateBox 編集開始前の overlay_mode（編集終了時に復元）
     pub overlay_before_drag_edit: Option<String>,
 
+    /// 「装飾なし」ON 直前の各キー値スナップショット。
+    /// キーは "{cfg_key}::{blend_key}"、値は (descriptキー → 値) のマップ。
+    /// OFF に戻したとき初期値ではなくこの保持値を復元する。
+    pub decoration_backup: HashMap<String, HashMap<String, String>>,
+
+    /// 左ペイン「バルーン」一覧の展開状態
+    pub balloon_list_open: bool,
+    /// 左ペイン「PNG一覧」の展開状態
+    pub png_list_open: bool,
+
     // --- 読み込み時警告 ---
     /// 素材フォルダ読み込み時に蓄積された警告メッセージ。呼び出し元がダイアログ表示後クリアする。
     pub load_warnings: Vec<String>,
@@ -303,6 +313,9 @@ impl AppState {
             drag_edit_target:  None,
             drag_state:        None,
             overlay_before_drag_edit: None,
+            decoration_backup: HashMap::new(),
+            balloon_list_open: true,
+            png_list_open: true,
             load_warnings:     Vec::new(),
 
             // --- プロジェクト新規作成UI ---

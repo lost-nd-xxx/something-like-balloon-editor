@@ -1739,11 +1739,13 @@ fn setup_japanese_font(ctx: &egui::Context) {
 
     fonts.font_data.insert("bizud".to_owned(), font_data.into());
 
+    // 先頭に挿入してグリフ解決を BIZ UDPGothic 優先にする
+    // （末尾 push だと全角記号・全角英字が egui 既定フォントで描画され字体が混ざる）
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
         fonts.families
             .entry(family)
             .or_default()
-            .push("bizud".to_owned());
+            .insert(0, "bizud".to_owned());
     }
 
     ctx.set_fonts(fonts);

@@ -898,16 +898,10 @@ fn draw_sample_text(
     let font_color        = get_color(parsed, "font.color").unwrap_or(Rgb(0,0,0));
     let disable_color     = get_color(parsed, "disable.font.color").unwrap_or(Rgb(128,128,128));
     // 装飾なし（blendmethod=none）のとき文字色は通常文字色を使う
-    // 色値 -1 は「透明/無効」扱いのため通常色にフォールバック
+    // 色値 -1 指定は get_color が None を返す（0～255 外）ため fallback にフォールバックする
     let resolve_color = |key: &str, fallback: Rgb| -> Rgb {
-        get_color(parsed, key)
-            .filter(|&Rgb(r, g, b)| !(r == 255 && g == 255 && b == 255 && {
-                // -1 は parse_descript で u8 にならないが念のため font_color にフォールバック
-                false
-            }))
-            .unwrap_or(fallback)
+        get_color(parsed, key).unwrap_or(fallback)
     };
-    // -1 指定の色は get_color が None を返す（r.g.b それぞれ -1 は 0～255 外）ので font_color になる
     let choice_color     = if !cursor_ns_deco { font_color } else { resolve_color("cursor.notselect.font.color", Rgb(0,0,255)) };
     let choice_sel_color = if !cursor_deco    { font_color } else { resolve_color("cursor.font.color",           Rgb(255,255,255)) };
     let anchor_color     = if !anchor_ns_deco { font_color } else { resolve_color("anchor.notselect.font.color", Rgb(0,0,255)) };
@@ -964,11 +958,11 @@ fn draw_sample_text(
         ("普通の文字",         0),
         ("←マーカー",         0),
         ("無効な表示",         1),
-        ("非選択中の選択肢",   2),
-        ("選択中の選択肢",     3),
-        ("非選択中のアンカー", 4),
-        ("選択中のアンカー",   5),
-        ("訪問済みのアンカー", 6),
+        ("選択肢(非選択)",     2),
+        ("選択肢(選択中)",     3),
+        ("アンカー(非選択)",   4),
+        ("アンカー(選択中)",   5),
+        ("アンカー(訪問済み)", 6),
     ];
 
     // origin.x/y: テキスト開始位置のオフセット（validrect 左上に加算）

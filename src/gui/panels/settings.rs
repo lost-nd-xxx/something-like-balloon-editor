@@ -170,20 +170,82 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                         } else {
                             app.state.descript_text.clone()
                         };
+                        let backup_key = format!("{}::{}", cfg_key, blend_key);
                         if checked {
+                            // ON 直前の各キー値をスナップショットして保持（OFF 復帰時に使う）
+                            let parsed = parse_descript(&descript_text);
+                            let mut snap = std::collections::HashMap::new();
+                            snap.insert(
+                                blend_key.to_string(),
+                                parsed.get(*blend_key).cloned().unwrap_or_else(|| "copypen".to_string()),
+                            );
+                            for (key, _on_default, _off_val) in *keys {
+                                if let Some(v) = parsed.get(*key) {
+                                    snap.insert((*key).to_string(), v.clone());
+                                }
+                            }
+                            app.state.decoration_backup.insert(backup_key, snap);
+
                             // blendmethod を none に、style/色を装飾なし値に設定
                             descript_text = set_descript_value(&descript_text, blend_key, "none");
                             for (key, _on_default, off_val) in *keys {
                                 descript_text = set_descript_value(&descript_text, key, off_val);
                             }
                         } else {
-                            // blendmethod を copypen に、style/色をデフォルト値に設定
-                            descript_text = set_descript_value(&descript_text, blend_key, "copypen");
+                            // OFF 復帰: 保持していた値があれば復元、なければ初期値
+                            let backup = app.state.decoration_backup.remove(&backup_key);
+                            let restore = |dt: String, key: &str, fallback: &str| -> String {
+                                let v = backup.as_ref()
+                                    .and_then(|m| m.get(key))
+                                    .map(|s| s.as_str())
+                                    .unwrap_or(fallback);
+                                set_descript_value(&dt, key, v)
+                            };
+                            descript_text = restore(descript_text, blend_key, "copypen");
                             for (key, on_default, _off_val) in *keys {
-                                descript_text = set_descript_value(&descript_text, key, on_default);
+                                descript_text = restore(descript_text, key, on_default);
                             }
                         }
                         write_back(app, ctx, &cfg_key, use_individual, descript_text);
+                    }
+                }
+
+                // 装飾なしON中は、グレーアウト表示に「装飾なしにする直前の値」を出す。
+                // 実値は -1/none だが、保持してある backup をマージした一時テキストへ
+                // 描画中だけ差し替える（グレーアウト中で編集不可のため書き戻しは起きない）。
+                let restore_text = if decoration_off {
+                    if let Some((_, blend_key, keys)) = deco_group {
+                        let backup_key = format!("{}::{}", cfg_key, blend_key);
+                        // backup があればその値、無ければ on_default（静的初期値）でマージする。
+                        // → 読み込み時から装飾なしのグループでも想定値が表示される。
+                        let snap = app.state.decoration_backup.get(&backup_key).cloned();
+                        let target = if use_individual {
+                            app.state.individual_texts.get(&cfg_key).cloned().unwrap_or_default()
+                        } else {
+                            app.state.descript_text.clone()
+                        };
+                        let mut merged = target.clone();
+                        let bm = snap.as_ref().and_then(|m| m.get(*blend_key).cloned())
+                            .unwrap_or_else(|| "copypen".to_string());
+                        merged = set_descript_value(&merged, blend_key, &bm);
+                        for (key, on_default, _off) in *keys {
+                            let v = snap.as_ref().and_then(|m| m.get(*key).cloned())
+                                .unwrap_or_else(|| (*on_default).to_string());
+                            merged = set_descript_value(&merged, key, &v);
+                        }
+                        Some((target, merged))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                // 一時差し替え（描画後に元へ戻す）
+                if let Some((_, merged)) = &restore_text {
+                    if use_individual {
+                        app.state.individual_texts.insert(cfg_key.clone(), merged.clone());
+                    } else {
+                        app.state.descript_text = merged.clone();
                     }
                 }
 
@@ -210,6 +272,15 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                             ui.end_row();
                         }
                     });
+
+                // 一時差し替えを元に戻す
+                if let Some((orig, _)) = restore_text {
+                    if use_individual {
+                        app.state.individual_texts.insert(cfg_key.clone(), orig);
+                    } else {
+                        app.state.descript_text = orig;
+                    }
+                }
             });
     }
 }
@@ -368,7 +439,7 @@ fn show_color_widget(
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut hex_text)
                     .id(egui::Id::new(&hex_key))
-                    .desired_width(58.0)
+                    .desired_width(90.0)
                     .font(egui::TextStyle::Monospace),
             );
 
@@ -480,6 +551,8 @@ fn show_int_widget(
     use crate::gui::state::EditingBuf;
 
     let mut val: i32 = current_str.parse().unwrap_or(0);
+    // スピナーの最小幅を広げる（桁数の多い値でも読みやすく）
+    ui.spacing_mut().interact_size.x = 72.0;
     let response = ui.add(egui::DragValue::new(&mut val).speed(1.0));
 
     if response.gained_focus() {
