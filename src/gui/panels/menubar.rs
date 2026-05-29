@@ -130,6 +130,13 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                 app.rebuild_and_refresh(ctx);
             }
             ui.separator();
+            ui.add_enabled_ui(app.state.is_project_dir() && !app.state.direct_image_mode, |ui| {
+                if ui.button("レイアウト定義を編集...").clicked() {
+                    ui.close_menu();
+                    app.state.show_files_editor_window = true;
+                }
+            });
+            ui.separator();
             let direct = app.state.direct_image_mode;
             // 画像編集なしモードでは強制的に no_balloon_color = true、チェックボックスはグレーアウト
             let mut no_color = if direct { true } else { app.state.no_balloon_color };

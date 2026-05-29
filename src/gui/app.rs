@@ -1747,6 +1747,9 @@ impl eframe::App for BalloonEditorApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             panels::preview::show(ui, self, ctx);
         });
+
+        // files.txt エディタウィンドウ
+        panels::files_editor::show(self, ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
