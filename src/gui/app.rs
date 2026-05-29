@@ -316,28 +316,30 @@ impl BalloonEditorApp {
             }
         }
 
-        // files.txt 内の参照を更新（ありモード・なしモード共通）
-        let files_txt = asset_dir.join("files.txt");
-        if files_txt.exists() {
-            if let Ok(content) = std::fs::read_to_string(&files_txt) {
-                let updated = content
-                    .lines()
-                    .map(|line| {
-                        line.split(',')
-                            .map(|part| {
-                                let trimmed = part.trim();
-                                if trimmed == old_stem {
-                                    part.replacen(trimmed, new_stem, 1)
-                                } else {
-                                    part.to_string()
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let _ = std::fs::write(&files_txt, updated);
+        // slbe_files_text（メモリ）内の参照を更新し、ディスクにも書き出す
+        if !self.state.slbe_files_text.is_empty() {
+            let updated = self.state.slbe_files_text
+                .lines()
+                .map(|line| {
+                    line.split(',')
+                        .map(|part| {
+                            let trimmed = part.trim();
+                            if trimmed == old_stem {
+                                part.replacen(trimmed, new_stem, 1)
+                            } else {
+                                part.to_string()
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let updated = format!("{}\n", updated);
+            self.state.slbe_files_text = updated.clone();
+            let files_txt = crate::core::layout::slbe_files_txt_path(&asset_dir);
+            if files_txt.exists() {
+                let _ = std::fs::write(&files_txt, &updated);
             }
         }
 
@@ -515,6 +517,25 @@ impl BalloonEditorApp {
             }
         }
 
+        // slbe_files.txt を profile/ に書き出す
+        {
+            let files_path = crate::core::layout::slbe_files_txt_path(&asset_dir);
+            let text = &self.state.slbe_files_text;
+            if text.trim().is_empty() {
+                if files_path.exists() {
+                    let _ = std::fs::remove_file(&files_path);
+                }
+            } else {
+                if let Some(parent) = files_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if let Err(e) = std::fs::write(&files_path, text) {
+                    self.err(format!("slbe_files.txt の保存に失敗しました:\n{}", e));
+                    return;
+                }
+            }
+        }
+
         // 色設定を profile/slbe_profile.json に保存
         let profile_path = crate::core::profile::project_profile_path(&asset_dir);
         let profile = build_project_profile_from_state(&self.state);
@@ -557,7 +578,7 @@ impl BalloonEditorApp {
         use crate::core::descript::parse_descript;
 
         let Some(_ad) = self.state.asset_dir() else {
-            self.err("素材フォルダが選択されていません。\n\nメニュー「ファイル > 素材フォルダを選択…」から素材フォルダを指定してください。".to_string());
+            self.err("素材フォルダが選択されていません。\n\nメニュー「ファイル > 素材フォルダを選択...」から素材フォルダを指定してください。".to_string());
             return;
         };
 
@@ -1533,8 +1554,15 @@ impl eframe::App for BalloonEditorApp {
                         if let Some(dir) = self.state.asset_dir() {
                             exists = dir.join(&target_filename).exists();
                         }
+                        // slbe_files.txt ありモードで、インポート先バルーン名が既に定義済みかチェック
+                        let target_stem = target_filename.trim_end_matches(".png");
+                        let defined_in_files_txt = !self.state.direct_image_mode
+                            && self.state.balloon_layout.contains_key(target_stem);
+
                         // 警告行は常に1行分確保（有無でウィンドウ高が変わらないように）
-                        if exists {
+                        if defined_in_files_txt {
+                            ui.colored_label(egui::Color32::from_rgb(220, 140, 0), "[!] このバルーン名は slbe_files.txt に既に定義されています。インポート時に該当定義を無効化します。");
+                        } else if exists {
                             ui.colored_label(egui::Color32::from_rgb(220, 80, 80), "[!] 既に同名ファイルが存在します。上書きされます。");
                         } else {
                             ui.label("");
@@ -1552,6 +1580,24 @@ impl eframe::App for BalloonEditorApp {
                                 if target_filename.is_empty() || target_filename.ends_with('.') {
                                     self.err("保存ファイル名が不正です。");
                                 } else {
+                                    // slbe_files.txt に定義済みの場合はコメントアウト（確認なし・undo対象外）
+                                    // インポート後の reload_asset_folder_keep_texts でディスクから
+                                    // 再パースされるため、メモリと同時にディスクにも即書き出す
+                                    if defined_in_files_txt {
+                                        let new_text = comment_out_balloon_in_files_txt(
+                                            &self.state.slbe_files_text,
+                                            target_stem,
+                                        );
+                                        self.state.slbe_files_text = new_text.clone();
+                                        if let Some(asset_dir) = self.state.asset_dir() {
+                                            let files_path = crate::core::layout::slbe_files_txt_path(&asset_dir);
+                                            if let Some(parent) = files_path.parent() {
+                                                let _ = std::fs::create_dir_all(parent);
+                                            }
+                                            let _ = std::fs::write(&files_path, &new_text);
+                                        }
+                                    }
+
                                     let proceed = if exists {
                                         rfd::MessageDialog::new()
                                             .set_title("上書き確認")
@@ -1822,6 +1868,25 @@ fn build_app_config_from_state(state: &AppState) -> crate::core::profile::AppCon
 
 // Rgb を分解するためのパターンマッチを使えるようにするための import
 use crate::core::color::Rgb;
+
+/// slbe_files.txt テキスト内の指定バルーン名行をコメントアウトして返す。
+/// 行の先頭が `balloon_name,` にマッチする行を `//` でコメントアウトする。
+fn comment_out_balloon_in_files_txt(text: &str, balloon_name: &str) -> String {
+    let prefix = format!("{},", balloon_name);
+    let lines: Vec<String> = text.lines().map(|line| {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("//") && trimmed.starts_with(&prefix) {
+            format!("//{}", line)
+        } else {
+            line.to_string()
+        }
+    }).collect();
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", lines.join("\n"))
+    }
+}
 
 /// ThemeMode を egui Visuals に変換して適用する
 pub fn apply_theme(ctx: &egui::Context, theme: crate::gui::state::ThemeMode) {

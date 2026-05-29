@@ -45,11 +45,23 @@ fn load_asset_folder_inner(state: &mut AppState, keep_texts: bool) -> anyhow::Re
         return Ok(());
     }
 
-    // files.txt のパース（なければ画像編集なしモード）
+    // slbe_files.txt のパース（なければ画像編集なしモード）
+    // load_balloon_layout は旧 files.txt があれば自動移行する
     let layout = load_balloon_layout(&asset_dir)?;
     let direct = is_direct_image_mode(&layout);
     state.direct_image_mode = direct;
     state.balloon_layout = layout.clone();
+    // slbe_files.txt のテキストをメモリに読み込む（undo対象）
+    // keep_texts のときはメモリ上の編集内容を保持する
+    if !keep_texts {
+        use crate::core::layout::slbe_files_txt_path;
+        let p = slbe_files_txt_path(&asset_dir);
+        state.slbe_files_text = if p.exists() {
+            std::fs::read_to_string(&p).unwrap_or_default()
+        } else {
+            String::new()
+        };
+    }
 
     // プレビューリスト生成
     state.preview_balloons = if direct {
@@ -59,11 +71,24 @@ fn load_asset_folder_inner(state: &mut AppState, keep_texts: bool) -> anyhow::Re
             .collect()
     } else {
         let odd_flip = make_odd_flip_sources(&layout, state.auto_flip);
-        let all_names: std::collections::HashSet<String> = layout
+        let mut all_names: std::collections::HashSet<String> = layout
             .keys()
             .chain(odd_flip.keys())
             .cloned()
             .collect();
+        // slbe_files.txt に定義のない物理ファイルを補完追加（優先度: slbe_files.txt > 物理ファイル）
+        // コメントアウトされた行も「定義なし」扱いとなるため、物理ファイルがあれば表示する
+        if let Ok(entries) = std::fs::read_dir(&asset_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("png") { continue; }
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    if stem.starts_with("balloon") && !all_names.contains(stem) {
+                        all_names.insert(stem.to_string());
+                    }
+                }
+            }
+        }
         let mut sorted: Vec<String> = all_names.into_iter().collect();
         sorted.sort_by(|a, b| sort_key(a).cmp(&sort_key(b)));
         sorted.into_iter().map(|n| format!("{}.png", n)).collect()

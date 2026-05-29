@@ -29,6 +29,8 @@ pub struct Snapshot {
     pub install_text:      String,
     pub individual_texts:  HashMap<String, String>,
     pub basic_info:        HashMap<String, String>,
+    /// slbe_files.txt のテキスト内容（undo で復元するため保持）
+    pub slbe_files_text:   String,
 }
 
 /// 個別バルーン色設定
@@ -126,6 +128,8 @@ pub struct AppState {
     pub readme_text:      String,
     pub individual_texts: HashMap<String, String>,
     pub basic_info:       HashMap<String, String>,
+    /// slbe_files.txt のテキスト内容（メモリ上の編集バッファ）
+    pub slbe_files_text:  String,
 
     // --- レイアウト ---
     pub balloon_layout:     HashMap<String, LayerList>,
@@ -301,6 +305,7 @@ impl AppState {
             readme_text:       String::new(),
             individual_texts:  HashMap::new(),
             basic_info:        HashMap::new(),
+            slbe_files_text:   String::new(),
             balloon_layout:    HashMap::new(),
             direct_image_mode: false,
             auto_flip:         true,
@@ -523,6 +528,7 @@ impl AppState {
             install_text:      self.install_text.clone(),
             individual_texts:  self.individual_texts.clone(),
             basic_info:        self.basic_info.clone(),
+            slbe_files_text:   self.slbe_files_text.clone(),
         }
     }
 
@@ -534,6 +540,20 @@ impl AppState {
         self.install_text      = snap.install_text;
         self.individual_texts  = snap.individual_texts;
         self.basic_info        = snap.basic_info;
+        self.slbe_files_text   = snap.slbe_files_text;
         self.balloon_cache.clear();
+        // slbe_files_text が変化した場合に備えて balloon_layout を再パース
+        if let Some(asset_dir) = self.asset_dir() {
+            match crate::core::layout::parse_balloon_layout(
+                &self.slbe_files_text,
+                &asset_dir,
+            ) {
+                Ok(layout) => {
+                    self.balloon_layout    = layout;
+                    self.direct_image_mode = crate::core::layout::is_direct_image_mode(&self.balloon_layout);
+                }
+                Err(_) => {} // パース失敗時は現状のまま保持
+            }
+        }
     }
 }
