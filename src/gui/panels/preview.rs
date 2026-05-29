@@ -32,12 +32,15 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
     }
 
     let available = ui.available_size();
+    // プレビュー領域の rect（オーバーレイの中央計算に使う）
+    // clip_rect() はパネルの描画クリップ領域全体を返すため中央計算に適している
+    let canvas_rect = ui.clip_rect();
 
     let texture_info = app.preview_texture.as_ref().map(|t| (t.id(), t.size_vec2()));
 
     match texture_info {
         Some((tex_id, img_size)) => {
-            let canvas_rect = ui.available_rect_before_wrap();
+            let canvas_rect = canvas_rect;
             let offset_x = (canvas_rect.width()  - img_size.x).max(0.0) / 2.0;
             let offset_y = (canvas_rect.height() - img_size.y).max(0.0) / 2.0;
 
@@ -82,7 +85,7 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
 
     // プレビュー生成中オーバーレイ
     if app.state.preview_generating {
-        let rect = ui.ctx().screen_rect();
+        let rect = canvas_rect;
         let painter = ui.ctx().layer_painter(egui::LayerId::new(
             egui::Order::Foreground,
             egui::Id::new("preview_generating_overlay"),

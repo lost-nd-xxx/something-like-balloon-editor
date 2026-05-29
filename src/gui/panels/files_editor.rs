@@ -103,7 +103,15 @@ pub fn parse_rows(text: &str) -> Vec<FilesRow> {
 
 pub fn rows_to_text(rows: &[FilesRow]) -> String {
     let lines: Vec<String> = rows.iter().map(|row| match row {
-        FilesRow::Comment(s) => s.clone(),
+        FilesRow::Comment(s) => {
+            // テキスト部分が空の "//" 行はファイル書き込み時に空行として出力する
+            let trimmed = s.trim();
+            if trimmed == "//" || trimmed.is_empty() {
+                String::new()
+            } else {
+                s.clone()
+            }
+        }
         FilesRow::Balloon { scope, layers } => {
             let mut parts = vec![scope.to_name()];
             for l in layers { parts.push(format!("{}:{}", l.filename, l.color_type)); }
