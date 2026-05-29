@@ -53,11 +53,11 @@ foreach ($f in $FilesToCopy) {
     Write-Host "    コピー: $(Split-Path $f -Leaf)"
 }
 
-# resource\assets\ をフォルダごとコピー
-$AssetSrc = "$ProjectRoot\resource\assets"
+# resource\sample_balloon\ をフォルダごとコピー
+$AssetSrc = "$ProjectRoot\resource\sample_balloon"
 if (-not (Test-Path $AssetSrc)) { throw "素材フォルダが見つかりません: $AssetSrc" }
-Copy-Item $AssetSrc -Destination "$InnerDir\assets" -Recurse
-Write-Host "    コピー: assets\"
+Copy-Item $AssetSrc -Destination "$InnerDir\sample_balloon" -Recurse
+Write-Host "    コピー: sample_balloon\"
 
 # ---------------------------------------------------------------------------
 # 4. zip 圧縮
