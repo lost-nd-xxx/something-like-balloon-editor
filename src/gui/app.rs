@@ -300,9 +300,11 @@ impl BalloonEditorApp {
         let ext = std::path::Path::new(old_name)
             .extension()
             .and_then(|e| e.to_str())
-            .unwrap_or("png");
-        let old_stem = old_name
-            .strip_suffix(&format!(".{}", ext))
+            .unwrap_or("png")
+            .to_string();
+        let old_stem = std::path::Path::new(old_name)
+            .file_stem()
+            .and_then(|s| s.to_str())
             .unwrap_or(old_name);
         let new_name = format!("{}.{}", new_stem, ext);
 
