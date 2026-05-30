@@ -20,8 +20,8 @@ pub fn open_png_rgba(path: &Path) -> anyhow::Result<RgbaImage> {
     }
 
     // 2/3/4. .pna なし: color_type で分岐
-    let dyn_img = image::open(path)
-        .map_err(|e| anyhow::anyhow!("{}: {}", path.display(), e))?;
+    // .pnr など非標準拡張子でも読めるよう、バイト列を PNG として読み込む
+    let dyn_img = open_image_any_ext(path)?;
 
     match dyn_img.color() {
         // 32bit RGBA: アルファそのまま
@@ -36,11 +36,29 @@ pub fn open_png_rgba(path: &Path) -> anyhow::Result<RgbaImage> {
     }
 }
 
+/// 拡張子に依存せず画像を読み込む。
+/// 標準拡張子（png/jpg等）は image::open、それ以外（pnr 等）は PNG として読み込む。
+fn open_image_any_ext(path: &Path) -> anyhow::Result<image::DynamicImage> {
+    let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase());
+    let is_standard = matches!(
+        ext.as_deref(),
+        Some("png" | "jpg" | "jpeg" | "bmp" | "gif" | "webp" | "tiff" | "tif")
+    );
+    if is_standard {
+        image::open(path).map_err(|e| anyhow::anyhow!("{}: {}", path.display(), e))
+    } else {
+        // pnr 等の非標準拡張子: 中身は PNG なのでバイト列を PNG としてデコード
+        let bytes = std::fs::read(path)
+            .map_err(|e| anyhow::anyhow!("{}: {}", path.display(), e))?;
+        image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+            .map_err(|e| anyhow::anyhow!("{}: {}", path.display(), e))
+    }
+}
+
 /// .pna ファイルをアルファチャンネルとして合成する
 /// .pna は拡張子が非標準のため image::open が使えない。ファイルバイト列を PNG としてデコードする。
 fn open_png_with_pna(png_path: &Path, pna_path: &Path) -> anyhow::Result<RgbaImage> {
-    let rgb = image::open(png_path)
-        .map_err(|e| anyhow::anyhow!("{}: {}", png_path.display(), e))?
+    let rgb = open_image_any_ext(png_path)?
         .to_rgb8();
 
     // .pna をバイト列として読み込み PNG デコード
@@ -205,6 +223,7 @@ pub fn build_all_balloons(
     asset_dir: &Path,
     colors: &ColorSet,
     layout: Option<&HashMap<String, LayerList>>,
+    auto_flip: bool,
 ) -> anyhow::Result<HashMap<String, RgbaImage>> {
     let owned;
     let layout = match layout {
@@ -222,14 +241,14 @@ pub fn build_all_balloons(
         results.insert(format!("{}.png", bname), img);
     }
 
-    // 奇数バルーン: files.txt に記述がないものは偶数番を反転して生成
-    let odd_flip = make_odd_flip_sources(layout);
-    for (odd, even) in &odd_flip {
-        if !layout.contains_key(odd) {
-            let even_key = format!("{}.png", even);
-            if let Some(even_img) = results.get(&even_key) {
-                let flipped = flip_horizontal(even_img);
-                results.insert(format!("{}.png", odd), flipped);
+    // 自動補完: files.txt に記述がないものを反転して生成（両方向）
+    let odd_flip = make_odd_flip_sources(layout, auto_flip);
+    for (target, source) in &odd_flip {
+        if !layout.contains_key(target) {
+            let source_key = format!("{}.png", source);
+            if let Some(source_img) = results.get(&source_key) {
+                let flipped = flip_horizontal(source_img);
+                results.insert(format!("{}.png", target), flipped);
             }
         }
     }

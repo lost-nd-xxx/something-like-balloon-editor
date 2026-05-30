@@ -1,7 +1,7 @@
 use egui::{Context, ScrollArea, Ui};
 use crate::gui::app::BalloonEditorApp;
 use crate::gui::field_def::{
-    ACCORDION_GROUPS, FieldType, GroupVisibility,
+    ACCORDION_GROUPS, DECORATION_GROUPS, FieldType, GroupVisibility,
 };
 use crate::core::descript::{
     parse_descript, set_descript_value, get_color_from_descript, set_color_in_descript,
@@ -13,16 +13,22 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
     ui.strong("バルーン設定");
     ui.separator();
 
+    let png_preview = app.state.png_preview_name.is_some();
     ScrollArea::vertical().show(ui, |ui| {
         show_basic_info_section(ui, app);
         ui.separator();
-        egui::CollapsingHeader::new("バルーン設定詳細")
-            .default_open(true)
-            .show(ui, |ui| {
-                show_accordion_settings(ui, app, ctx);
-            });
-        ui.separator();
-        show_drag_edit_section(ui, app);
+        // PNG一覧プレビュー中はバルーン設定・位置編集をグレーアウト＆非表示
+        ui.add_enabled_ui(!png_preview, |ui| {
+            if !png_preview {
+                egui::CollapsingHeader::new("バルーン設定詳細")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        show_accordion_settings(ui, app, ctx);
+                    });
+                ui.separator();
+                show_drag_edit_section(ui, app, ctx);
+            }
+        });
     });
 }
 
@@ -139,16 +145,130 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
         egui::CollapsingHeader::new(group.name)
             .default_open(false)
             .show(ui, |ui| {
+                // 装飾なしチェックボックスを持つグループか判定
+                let deco_group = DECORATION_GROUPS.iter()
+                    .find(|(name, _, _)| *name == group.name);
+
+                // シンプルモード判定: blendmethod が "none" または未定義のとき
+                // 個別設定に blendmethod キーが存在しない場合は共通 descript_text を参照する
+                let (simple_mode, blend_val) = if let Some((_, blend_key, _)) = deco_group {
+                    let indiv_text = if use_individual {
+                        app.state.individual_texts.get(&cfg_key).cloned().unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    let indiv_has_key = parse_descript(&indiv_text).contains_key(*blend_key);
+                    let descript_text = if use_individual && indiv_has_key {
+                        indiv_text
+                    } else {
+                        app.state.descript_text.clone()
+                    };
+                    let bv = parse_descript(&descript_text)
+                        .get(*blend_key).cloned()
+                        .unwrap_or_default();
+                    let is_simple = bv.trim().to_lowercase() == "none" || bv.is_empty();
+                    (is_simple, bv)
+                } else {
+                    (false, String::new())
+                };
+                // copypen/none 以外のblendmethodはTODO: グレーアウト対応
+                let blend_is_unsupported = !blend_val.is_empty()
+                    && blend_val.trim().to_lowercase() != "none"
+                    && blend_val.trim().to_lowercase() != "copypen";
+
+                // シンプルモードではフィールドをグレーアウトしない
+                let decoration_off = false;
+
+                if let Some((_, blend_key, keys)) = deco_group {
+                    // ラスタオペレーション = copypen のときON、none/未定義のときOFF
+                    let mut checked = !simple_mode;
+                    ui.add_enabled_ui(!blend_is_unsupported, |ui| {
+                    let hover_text = if blend_is_unsupported {
+                        format!(
+                            "現在の値 \"{}\" はこのアプリでは変更できません",
+                            blend_val.trim()
+                        )
+                    } else {
+                        "ON:  blendmethod,copypen\nOFF: blendmethod,none".to_string()
+                    };
+                    // 無効化時は on_disabled_hover_text、有効時は on_hover_text を使う
+                    let cb = ui.checkbox(&mut checked, "ラスタオペレーション")
+                        .on_hover_text(hover_text.clone())
+                        .on_disabled_hover_text(hover_text);
+                    if cb.changed() {
+                        app.state.push_undo();
+                        let mut descript_text = if use_individual {
+                            app.state.individual_texts.get(&cfg_key).cloned().unwrap_or_default()
+                        } else {
+                            app.state.descript_text.clone()
+                        };
+                        let backup_key = format!("{}::{}", cfg_key, blend_key);
+                        if !checked {
+                            // OFF(→none): 直前の各キー値をスナップショット
+                            let parsed = parse_descript(&descript_text);
+                            let mut snap = std::collections::HashMap::new();
+                            snap.insert(
+                                blend_key.to_string(),
+                                parsed.get(*blend_key).cloned().unwrap_or_else(|| "copypen".to_string()),
+                            );
+                            for (key, _on_default, _off_val) in *keys {
+                                if let Some(v) = parsed.get(*key) {
+                                    snap.insert((*key).to_string(), v.clone());
+                                }
+                            }
+                            app.state.decoration_backup.insert(backup_key, snap);
+
+                            // blendmethod を none に設定（pen/brush色はそのまま保持）
+                            descript_text = set_descript_value(&descript_text, blend_key, "none");
+                        } else {
+                            // ON(→copypen): 保持していた値があれば復元、なければ初期値
+                            let backup = app.state.decoration_backup.remove(&backup_key);
+                            let restore = |dt: String, key: &str, fallback: &str| -> String {
+                                let v = backup.as_ref()
+                                    .and_then(|m| m.get(key))
+                                    .map(|s| s.as_str())
+                                    .unwrap_or(fallback);
+                                set_descript_value(&dt, key, v)
+                            };
+                            descript_text = restore(descript_text, blend_key, "copypen");
+                            for (key, on_default, _off_val) in *keys {
+                                descript_text = restore(descript_text, key, on_default);
+                            }
+                        }
+                        write_back(app, ctx, &cfg_key, use_individual, descript_text);
+                    }
+                    }); // add_enabled_ui
+                }
+
                 egui::Grid::new(group.name)
                     .num_columns(2)
                     .spacing([8.0, 4.0])
                     .show(ui, |ui| {
                         for field in group.fields {
-                            // 影スタイルは対応する影色が none のときグレーアウト
+                            // シンプルモード(blendmethod=none)に応じてフィールドを切り替え表示
+                            // シンプルモードON  → pen.color/brush.color を非表示、shadowcolor/shadowstyle を表示
+                            // シンプルモードOFF → shadowcolor/shadowstyle を非表示
+                            if deco_group.is_some() {
+                                let is_pen   = field.key.contains(".pen.color");
+                                let is_brush = field.key.contains(".brush.color");
+                                let is_shadow_color = field.key.contains(".font.shadowcolor");
+                                let is_shadow_style = field.key.contains(".font.shadowstyle");
+                                if simple_mode {
+                                    if is_pen || is_brush { continue; }
+                                } else {
+                                    if is_shadow_color || is_shadow_style { continue; }
+                                }
+                            }
+
+                            // 影スタイルは対応する影色が none または未設定のときグレーアウト
                             let enabled = if field.key.ends_with(".shadowstyle") {
                                 let shadow_color_key = field.key.trim_end_matches("style").to_string() + "color.r";
                                 let v = resolve_field_value(app, &shadow_color_key, &cfg_key, use_individual);
-                                v.to_lowercase() != "none"
+                                // 未設定（空文字）はデフォルト none 扱い
+                                !v.is_empty() && v.to_lowercase() != "none"
+                            } else if deco_group.is_some() {
+                                // シンプルモード中は全フィールドをグレーアウト
+                                !decoration_off
                             } else {
                                 true
                             };
@@ -159,6 +279,7 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                             ui.end_row();
                         }
                     });
+
             });
     }
 }
@@ -317,7 +438,7 @@ fn show_color_widget(
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut hex_text)
                     .id(egui::Id::new(&hex_key))
-                    .desired_width(58.0)
+                    .desired_width(90.0)
                     .font(egui::TextStyle::Monospace),
             );
 
@@ -429,6 +550,8 @@ fn show_int_widget(
     use crate::gui::state::EditingBuf;
 
     let mut val: i32 = current_str.parse().unwrap_or(0);
+    // スピナーの最小幅を広げる（桁数の多い値でも読みやすく）
+    ui.spacing_mut().interact_size.x = 72.0;
     let response = ui.add(egui::DragValue::new(&mut val).speed(1.0));
 
     if response.gained_focus() {
@@ -535,7 +658,7 @@ fn color32_to_rgb(c: egui::Color32) -> Rgb {
 // 位置編集セクション
 // ---------------------------------------------------------------------------
 
-fn show_drag_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp) {
+fn show_drag_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &egui::Context) {
     egui::CollapsingHeader::new("位置編集")
         .default_open(false)
         .show(ui, |ui| {
@@ -568,13 +691,14 @@ fn show_drag_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp) {
                                                           all_entries.push(("カウンタ数値",   DragEditTarget::Counter));
                 if parts.contains_key("online0.png")   { all_entries.push(("オンライン",     DragEditTarget::OnlineMarker)); }
             }
-            show_drag_entry_list(ui, app, all_entries, &parts);
+            show_drag_entry_list(ui, app, ctx, all_entries, &parts);
         });
 }
 
 fn show_drag_entry_list(
     ui: &mut Ui,
     app: &mut BalloonEditorApp,
+    ctx: &egui::Context,
     entries: Vec<(&str, DragEditTarget)>,
     _parts: &std::collections::HashMap<String, image::RgbaImage>,
 ) {
@@ -586,20 +710,38 @@ fn show_drag_entry_list(
                 let is_active = app.state.drag_edit_target.as_ref() == Some(&target);
                 ui.label(label);
                 if is_active {
-                    if ui.button(egui::RichText::new("✏ 編集終了").color(egui::Color32::from_rgb(255, 160, 50))).clicked() {
+                    if ui.button(egui::RichText::new("編集終了").color(egui::Color32::from_rgb(255, 160, 50))).clicked() {
                         app.state.drag_edit_target = None;
                         app.state.drag_state = None;
+                        // 編集開始前の overlay_mode を復元
+                        if let Some(prev) = app.state.overlay_before_drag_edit.take() {
+                            if app.state.overlay_mode != prev {
+                                app.state.overlay_mode = prev;
+                                app.refresh_preview_texture(ctx);
+                            }
+                        }
                     }
                 } else {
                     if ui.button("編集開始").clicked() {
-                        app.state.drag_edit_target = Some(target);
+                        app.state.drag_edit_target = Some(target.clone());
                         app.state.drag_state = None;
+                        // ValidRect/CommunicateBox 編集開始時はオーバーレイを自動ON
+                        if matches!(target, DragEditTarget::ValidRect | DragEditTarget::CommunicateBox) {
+                            if app.state.overlay_mode != "layout" {
+                                app.state.overlay_before_drag_edit = Some(app.state.overlay_mode.clone());
+                                app.state.overlay_mode = "layout".to_string();
+                                app.refresh_preview_texture(ctx);
+                            } else {
+                                app.state.overlay_before_drag_edit = None;
+                            }
+                        }
                     }
                 }
                 ui.end_row();
             }
         });
 }
+
 
 /// 選択中バルーンが個別設定を持てるかどうかを判定する。
 /// balloonc* / balloonk* / balloons* / balloonp*def* を対象（奇数反転生成も含む）。

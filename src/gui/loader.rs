@@ -11,6 +11,16 @@ use crate::core::{
 };
 use crate::gui::state::AppState;
 
+/// Windows の \\?\ UNC long-path プレフィックスを除去して通常パスを返す。
+fn strip_unc_prefix(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if s.starts_with(r"\\?\") {
+        PathBuf::from(&s[4..])
+    } else {
+        path.to_path_buf()
+    }
+}
+
 /// 素材フォルダを読み込んで AppState を更新する。
 /// エラーが発生した場合は Err を返す（呼び出し元がダイアログ表示する）。
 pub fn load_asset_folder(state: &mut AppState, _root: &Path) -> anyhow::Result<()> {
@@ -27,26 +37,67 @@ fn load_asset_folder_inner(state: &mut AppState, keep_texts: bool) -> anyhow::Re
         Some(p) => p,
         None => return Ok(()),
     };
+    // Windows の \\?\ UNC プレフィックスを除去して通常パスに正規化する
+    let asset_dir = strip_unc_prefix(&asset_dir);
 
-    // files.txt のパース（なければ画像編集なしモード）
-    let layout = load_balloon_layout(&asset_dir)?;
+    // フォルダが存在しない場合は何もしない（新規作成直後などのタイミング差を吸収）
+    if !asset_dir.is_dir() {
+        return Ok(());
+    }
+
+    // slbe_files.txt のパース（なければ画像編集なしモード）
+    // load_balloon_layout は旧 files.txt があれば自動移行する
+    // keep_texts のときはメモリ上の slbe_files_text からパースし、ディスクは読まない
+    let layout = if keep_texts && !state.slbe_files_text.is_empty() {
+        // メモリ上のテキストからパース（エラー時はディスクにフォールバック）
+        match crate::core::layout::parse_balloon_layout(&state.slbe_files_text, &asset_dir) {
+            Ok(l) => l,
+            Err(_) => load_balloon_layout(&asset_dir)?,
+        }
+    } else {
+        load_balloon_layout(&asset_dir)?
+    };
     let direct = is_direct_image_mode(&layout);
     state.direct_image_mode = direct;
     state.balloon_layout = layout.clone();
+    // slbe_files.txt のテキストをメモリに読み込む（undo対象）
+    // keep_texts のときはメモリ上の編集内容を保持する
+    if !keep_texts {
+        use crate::core::layout::slbe_files_txt_path;
+        let p = slbe_files_txt_path(&asset_dir);
+        state.slbe_files_text = if p.exists() {
+            std::fs::read_to_string(&p).unwrap_or_default()
+        } else {
+            String::new()
+        };
+    }
 
     // プレビューリスト生成
     state.preview_balloons = if direct {
-        detect_direct_balloons(&asset_dir)
+        detect_direct_balloons(&asset_dir, state.auto_flip)
             .into_iter()
             .map(|n| format!("{}.png", n))
             .collect()
     } else {
-        let odd_flip = make_odd_flip_sources(&layout);
-        let all_names: std::collections::HashSet<String> = layout
+        let odd_flip = make_odd_flip_sources(&layout, state.auto_flip);
+        let mut all_names: std::collections::HashSet<String> = layout
             .keys()
             .chain(odd_flip.keys())
             .cloned()
             .collect();
+        // slbe_files.txt に定義のない物理ファイルを補完追加（優先度: slbe_files.txt > 物理ファイル）
+        // コメントアウトされた行も「定義なし」扱いとなるため、物理ファイルがあれば表示する
+        if let Ok(entries) = std::fs::read_dir(&asset_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("png") { continue; }
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    if stem.starts_with("balloon") && !all_names.contains(stem) {
+                        all_names.insert(stem.to_string());
+                    }
+                }
+            }
+        }
         let mut sorted: Vec<String> = all_names.into_iter().collect();
         sorted.sort_by(|a, b| sort_key(a).cmp(&sort_key(b)));
         sorted.into_iter().map(|n| format!("{}.png", n)).collect()
@@ -68,7 +119,12 @@ fn load_asset_folder_inner(state: &mut AppState, keep_texts: bool) -> anyhow::Re
         state.install_text  = read_utf8(&asset_dir.join("install.txt"));
         state.readme_text   = read_utf8(&asset_dir.join("readme.txt"));
 
-        // 文字コードチェック: UTF-8 以外であれば警告（それぞれ独立してチェック）
+        // 文字コードチェック
+        // - NonUtf8Bytes（バイト列が壊れている）: 書き換えで直せないため警告
+        // - NonUtf8Charset（UTF-8で読めるがcharset宣言が異なる）:
+        //     プロジェクトフォルダなら charset を UTF-8 に自動書き換えして通知、
+        //     それ以外（外部素材フォルダ）は触らず警告のみ
+        let is_project = state.is_project_dir();
         for fname in ["descript.txt", "install.txt"] {
             let path = asset_dir.join(fname);
             if !path.exists() { continue; }
@@ -81,13 +137,55 @@ fn load_asset_folder_inner(state: &mut AppState, keep_texts: bool) -> anyhow::Re
                     ));
                 }
                 EncodingStatus::NonUtf8Charset(cs) => {
-                    state.load_warnings.push(format!(
-                        "{fname} の charset が \"{cs}\" に設定されています。\n\
-                         このアプリは UTF-8 のみ対応しています。\n\
-                         文字化けが発生している場合はファイルを UTF-8 に変換してください。"
-                    ));
+                    if is_project {
+                        // プロジェクトフォルダ: charset を UTF-8 に自動書き換え
+                        if let Ok(true) = crate::core::project::ensure_charset_utf8(&path) {
+                            // 再読み込み
+                            if fname == "descript.txt" {
+                                state.descript_text = read_utf8(&path);
+                            } else {
+                                state.install_text = read_utf8(&path);
+                            }
+                            state.load_warnings.push(format!(
+                                "{fname} の charset が \"{cs}\" でしたが、UTF-8 に修正しました。"
+                            ));
+                        }
+                    } else {
+                        state.load_warnings.push(format!(
+                            "{fname} の charset が \"{cs}\" に設定されています。\n\
+                             このアプリは UTF-8 のみ対応しています。\n\
+                             文字化けが発生している場合はファイルを UTF-8 に変換してください。"
+                        ));
+                    }
                 }
                 EncodingStatus::Ok => {}
+            }
+        }
+
+        // プロジェクトフォルダのとき: 装飾エントリが未定義なら初期値を補完してファイルに書き込む
+        // ロード後に descript_text を再読み込みする
+        if is_project {
+            let descript_path = asset_dir.join("descript.txt");
+            if descript_path.exists() {
+                if let Ok(filled) = crate::core::project::ensure_decoration_entries(&descript_path) {
+                    state.descript_text = read_utf8(&descript_path);
+                    if !filled.is_empty() {
+                        // 補完したグループをblendmethodキー名から読みやすい名前に変換
+                        let group_names: Vec<&str> = filled.iter().map(|k| match k.as_str() {
+                            "cursor.blendmethod"           => "選択肢(選択中)",
+                            "cursor.notselect.blendmethod" => "選択肢(非選択)",
+                            "anchor.blendmethod"           => "アンカー(選択中)",
+                            "anchor.notselect.blendmethod" => "アンカー(非選択)",
+                            "anchor.visited.blendmethod"   => "アンカー(訪問済み)",
+                            other => other,
+                        }).collect();
+                        state.load_warnings.push(format!(
+                            "descript.txt に以下のグループの装飾設定が見つからなかったため、初期値を補完しました。\n\
+                             内容を確認し、必要に応じて設定を調整してください。\n\n{}",
+                            group_names.join("\n")
+                        ));
+                    }
+                }
             }
         }
 
@@ -120,32 +218,33 @@ fn load_asset_folder_inner(state: &mut AppState, keep_texts: bool) -> anyhow::Re
 
 /// バルーン画像キャッシュを再構築する
 pub fn rebuild_balloon_cache(state: &mut AppState, asset_dir: &Path) -> anyhow::Result<()> {
+    if !asset_dir.is_dir() {
+        return Ok(());
+    }
     if state.direct_image_mode {
         // 画像編集なしモード: balloon*.png をそのまま読む
         state.balloon_cache.clear();
         for name in &state.preview_balloons.clone() {
             let stem = name.trim_end_matches(".png");
             let path = asset_dir.join(name);
-            // 奇数番で元ファイルがない場合は偶数番を反転
+            // ファイルがない場合は自動補完（両方向）
             let img = if path.exists() {
                 open_png_rgba(&path)?
-            } else {
-                // 偶数番を反転して生成
-                let even = even_name_of(stem);
-                let even_path = asset_dir.join(format!("{}.png", even));
-                if even_path.exists() {
-                    crate::core::composer::flip_horizontal(
-                        &open_png_rgba(&even_path)?,
-                    )
+            } else if let Some(src) = flip_source_of(stem) {
+                let src_path = asset_dir.join(format!("{}.png", src));
+                if src_path.exists() {
+                    crate::core::composer::flip_horizontal(&open_png_rgba(&src_path)?)
                 } else {
                     continue;
                 }
+            } else {
+                continue;
             };
             state.balloon_cache.insert(name.clone(), img);
         }
     } else {
         let cs = state.color_set();
-        let images = build_all_balloons(asset_dir, &cs, Some(&state.balloon_layout))?;
+        let images = build_all_balloons(asset_dir, &cs, Some(&state.balloon_layout), state.auto_flip)?;
         state.balloon_cache = images;
     }
 
@@ -165,7 +264,14 @@ pub fn rebuild_balloon_cache(state: &mut AppState, asset_dir: &Path) -> anyhow::
 /// 選択バルーンのみ合成してキャッシュを更新する（Undo/Redo 後の高速プレビュー用）。
 /// 他のバルーンのキャッシュはクリアし、選択時に遅延合成される。
 pub fn rebuild_selected_balloon(state: &mut AppState, asset_dir: &Path) -> anyhow::Result<()> {
+    if !asset_dir.is_dir() {
+        return Ok(());
+    }
     let selected = state.selected_balloon.clone();
+    // 選択バルーンが空（画像なしモードなど）は何もしない
+    if selected.is_empty() {
+        return Ok(());
+    }
     let selected_stem = selected.trim_end_matches(".png").to_string();
 
     // 他のバルーンのキャッシュはクリア（古い色のまま残らないように）
@@ -176,34 +282,30 @@ pub fn rebuild_selected_balloon(state: &mut AppState, asset_dir: &Path) -> anyho
         let path = asset_dir.join(&selected);
         let img = if path.exists() {
             open_png_rgba(&path)?
-        } else {
-            let even = even_name_of(&selected_stem);
-            let even_path = asset_dir.join(format!("{}.png", even));
-            if even_path.exists() {
-                crate::core::composer::flip_horizontal(&open_png_rgba(&even_path)?)
+        } else if let Some(src) = flip_source_of(&selected_stem) {
+            let src_path = asset_dir.join(format!("{}.png", src));
+            if src_path.exists() {
+                crate::core::composer::flip_horizontal(&open_png_rgba(&src_path)?)
             } else {
                 return Ok(());
             }
+        } else {
+            return Ok(());
         };
         state.balloon_cache.insert(selected.clone(), img);
     } else {
         let cs = state.color_set_for(Some(&selected_stem));
         let layout = &state.balloon_layout;
 
-        // 奇数バルーンの場合は反転元（偶数）も合成が必要
-        let even_stem = even_name_of(&selected_stem);
-        let needs_flip = even_stem != selected_stem && !layout.contains_key(&selected_stem);
-
-        if needs_flip {
-            // 偶数番を合成して反転
-            if let Some(layers) = layout.get(&even_stem) {
-                let even_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
-                let flipped = crate::core::composer::flip_horizontal(&even_img);
-                state.balloon_cache.insert(selected.clone(), flipped);
-            }
-        } else if let Some(layers) = layout.get(&selected_stem) {
+        if let Some(layers) = layout.get(&selected_stem) {
             let img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
             state.balloon_cache.insert(selected.clone(), img);
+        } else if let Some(src) = flip_source_of(&selected_stem) {
+            if let Some(layers) = layout.get(&src) {
+                let src_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
+                let flipped = crate::core::composer::flip_horizontal(&src_img);
+                state.balloon_cache.insert(selected.clone(), flipped);
+            }
         }
     }
 
@@ -222,7 +324,14 @@ pub fn rebuild_selected_balloon(state: &mut AppState, asset_dir: &Path) -> anyho
 
 /// 指定バルーン名のキャッシュが無ければ合成して追加する（バルーン選択時の遅延合成）。
 pub fn ensure_balloon_cached(state: &mut AppState, asset_dir: &Path) -> anyhow::Result<()> {
+    if !asset_dir.is_dir() {
+        return Ok(());
+    }
     let selected = state.selected_balloon.clone();
+    // 選択バルーンが空（画像なしモードなど）は何もしない
+    if selected.is_empty() {
+        return Ok(());
+    }
     if state.balloon_cache.contains_key(&selected) {
         return Ok(());
     }
@@ -232,31 +341,30 @@ pub fn ensure_balloon_cached(state: &mut AppState, asset_dir: &Path) -> anyhow::
         let path = asset_dir.join(&selected);
         let img = if path.exists() {
             open_png_rgba(&path)?
-        } else {
-            let even = even_name_of(&selected_stem);
-            let even_path = asset_dir.join(format!("{}.png", even));
-            if even_path.exists() {
-                crate::core::composer::flip_horizontal(&open_png_rgba(&even_path)?)
+        } else if let Some(src) = flip_source_of(&selected_stem) {
+            let src_path = asset_dir.join(format!("{}.png", src));
+            if src_path.exists() {
+                crate::core::composer::flip_horizontal(&open_png_rgba(&src_path)?)
             } else {
                 return Ok(());
             }
+        } else {
+            return Ok(());
         };
         state.balloon_cache.insert(selected, img);
     } else {
         let cs = state.color_set_for(Some(&selected_stem));
         let layout = &state.balloon_layout;
-        let even_stem = even_name_of(&selected_stem);
-        let needs_flip = even_stem != selected_stem && !layout.contains_key(&selected_stem);
 
-        if needs_flip {
-            if let Some(layers) = layout.get(&even_stem) {
-                let even_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
-                let flipped = crate::core::composer::flip_horizontal(&even_img);
-                state.balloon_cache.insert(selected, flipped);
-            }
-        } else if let Some(layers) = layout.get(&selected_stem) {
+        if let Some(layers) = layout.get(&selected_stem) {
             let img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
             state.balloon_cache.insert(selected, img);
+        } else if let Some(src) = flip_source_of(&selected_stem) {
+            if let Some(layers) = layout.get(&src) {
+                let src_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
+                let flipped = crate::core::composer::flip_horizontal(&src_img);
+                state.balloon_cache.insert(selected, flipped);
+            }
         }
     }
 
@@ -278,14 +386,15 @@ pub fn build_all_balloons_for_export(
             let path = asset_dir.join(name);
             let img = if path.exists() {
                 open_png_rgba(&path)?
-            } else {
-                let even = even_name_of(stem);
-                let even_path = asset_dir.join(format!("{}.png", even));
-                if even_path.exists() {
-                    crate::core::composer::flip_horizontal(&open_png_rgba(&even_path)?)
+            } else if let Some(src) = flip_source_of(stem) {
+                let src_path = asset_dir.join(format!("{}.png", src));
+                if src_path.exists() {
+                    crate::core::composer::flip_horizontal(&open_png_rgba(&src_path)?)
                 } else {
                     continue;
                 }
+            } else {
+                continue;
             };
             result.insert(name.clone(), img);
         }
@@ -295,20 +404,21 @@ pub fn build_all_balloons_for_export(
             let stem = name.trim_end_matches(".png");
             // 個別色があればそちらを優先、なければ共通色
             let cs = state.color_set_for(Some(stem));
-            let even_stem = even_name_of(stem);
-            let needs_flip = even_stem != stem && !layout.contains_key(stem);
 
-            let img = if needs_flip {
-                if let Some(layers) = layout.get(&even_stem) {
-                    let even_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
-                    crate::core::composer::flip_horizontal(&even_img)
+            let img = if let Some(layers) = layout.get(stem) {
+                // files.txt に直接定義あり
+                crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?
+            } else if let Some(src) = flip_source_of(stem).filter(|s| layout.contains_key(s)) {
+                if let Some(layers) = layout.get(&src) {
+                    let src_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
+                    crate::core::composer::flip_horizontal(&src_img)
                 } else {
                     continue;
                 }
-            } else if let Some(layers) = layout.get(stem) {
-                crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?
             } else {
-                continue;
+                {
+                    continue;
+                }
             };
             result.insert(name.clone(), img);
         }
@@ -446,3 +556,128 @@ fn even_name_of(stem: &str) -> String {
     }
     stem.to_string()
 }
+
+/// 偶数番バルーン名から対応する奇数番バルーン名を返す（偶数でなければそのまま返す）
+fn odd_name_of(stem: &str) -> String {
+    for prefix in &["balloonk", "balloons"] {
+        if let Some(rest) = stem.strip_prefix(prefix) {
+            if let Ok(n) = rest.parse::<u32>() {
+                if n % 2 == 0 {
+                    return format!("{}{}", prefix, n + 1);
+                }
+            }
+        }
+    }
+    stem.to_string()
+}
+
+/// stem の自動補完反転元を返す（奇数→偶数、偶数→奇数の両方向）
+/// 反転元が存在しない場合は None
+fn flip_source_of(stem: &str) -> Option<String> {
+    let even = even_name_of(stem);
+    if even != stem { return Some(even); }
+    let odd = odd_name_of(stem);
+    if odd != stem { return Some(odd); }
+    None
+}
+
+/// 指定された画像ファイルが 24bit PNG（透過色なし）であるか判定します。
+pub fn is_24bit_png(path: &Path) -> bool {
+    if let Ok(dyn_img) = image::open(path) {
+        match dyn_img.color() {
+            image::ColorType::Rgba8 | image::ColorType::Rgba16 | image::ColorType::Rgba32F => false,
+            _ => true,
+        }
+    } else {
+        false
+    }
+}
+
+/// 選択された画像を物理的にプロジェクトフォルダへコピーします。
+/// 24bit PNGの隣に同名 .pna が存在する場合、.pna も追従コピーします。
+/// 競合（同名ファイル）が存在する場合、一時退避およびロールバックによる安全対策を行います。
+pub fn import_image_file_safe(
+    state: &AppState,
+    src_png_path: &Path,
+    target_filename: &str,
+) -> anyhow::Result<()> {
+    let asset_dir = state
+        .asset_dir()
+        .ok_or_else(|| anyhow::anyhow!("プロジェクトフォルダが選択されていません"))?;
+
+    let dest_png_path = asset_dir.join(target_filename);
+    let backup_png_path = dest_png_path.with_extension("png_backup");
+
+    // pna のパス（PNGの拡張子を pna に変えたもの）
+    let src_pna_path = src_png_path.with_extension("pna");
+    let has_pna = is_24bit_png(src_png_path) && src_pna_path.exists();
+
+    let dest_pna_path = dest_png_path.with_extension("pna");
+    let backup_pna_path = dest_pna_path.with_extension("pna_backup");
+
+    // 1. 既存競合ファイルの一時退避
+    let png_existed = dest_png_path.exists();
+    if png_existed {
+        if backup_png_path.exists() {
+            std::fs::remove_file(&backup_png_path)?;
+        }
+        std::fs::rename(&dest_png_path, &backup_png_path)?;
+    }
+
+    let pna_existed = dest_pna_path.exists();
+    if pna_existed {
+        if backup_pna_path.exists() {
+            std::fs::remove_file(&backup_pna_path)?;
+        }
+        std::fs::rename(&dest_pna_path, &backup_pna_path)?;
+    }
+
+    // 2. 物理コピーの実行
+    // 親ディレクトリの作成（念のため）
+    if let Some(parent) = dest_png_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // PNGのコピー
+    if let Err(e) = std::fs::copy(src_png_path, &dest_png_path) {
+        // エラー時はロールバック
+        rollback_import(&dest_png_path, png_existed, &backup_png_path)?;
+        rollback_import(&dest_pna_path, pna_existed, &backup_pna_path)?;
+        return Err(anyhow::anyhow!("PNGファイルのコピーに失敗しました: {}", e));
+    }
+
+    // PNAの追従コピー
+    if has_pna {
+        if let Err(e) = std::fs::copy(&src_pna_path, &dest_pna_path) {
+            // エラー時はロールバック
+            rollback_import(&dest_png_path, png_existed, &backup_png_path)?;
+            rollback_import(&dest_pna_path, pna_existed, &backup_pna_path)?;
+            return Err(anyhow::anyhow!("PNAファイルのコピーに失敗しました: {}", e));
+        }
+    }
+
+    // 3. コピー成功: 退避していたバックアップをクリーンアップ
+    if png_existed && backup_png_path.exists() {
+        let _ = std::fs::remove_file(&backup_png_path);
+    }
+    if pna_existed && backup_pna_path.exists() {
+        let _ = std::fs::remove_file(&backup_pna_path);
+    }
+
+    Ok(())
+}
+
+fn rollback_import(
+    dest_path: &Path,
+    existed: bool,
+    backup_path: &Path,
+) -> anyhow::Result<()> {
+    if dest_path.exists() {
+        let _ = std::fs::remove_file(dest_path);
+    }
+    if existed && backup_path.exists() {
+        std::fs::rename(backup_path, dest_path)?;
+    }
+    Ok(())
+}
+
