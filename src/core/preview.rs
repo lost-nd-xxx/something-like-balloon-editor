@@ -172,7 +172,7 @@ pub fn draw_preview(
         draw_communicatebox(&mut img, &parsed, parts_cache, &opts.balloon_name, &font_name, parsed_font_ref, &mut sess);
     } else {
         draw_parts(&mut img, &parsed, parts_cache, w, h, &font_name, parsed_font_ref, no_aa, &mut sess);
-        draw_sample_text(&mut img, &parsed, &vr, parts_cache, opts.mode, &font_name, parsed_font_ref, no_aa, &mut sess);
+        draw_sample_text(&mut img, &parsed, &vr, parts_cache, opts.mode, &opts.balloon_name, &font_name, parsed_font_ref, no_aa, &mut sess);
     }
 
     if opts.show_overlay {
@@ -867,6 +867,7 @@ fn draw_sample_text(
     vr: &ValidRect,
     cache: &HashMap<String, RgbaImage>,
     mode: PreviewMode,
+    balloon_name: &str,
     font_name: &str,
     font: Option<&fontdue::Font>,
     no_aa: bool,
@@ -971,8 +972,36 @@ fn draw_sample_text(
     let text_x = vr.left + origin_x;
     let mut text_y = vr.top + origin_y;
 
-    // サンプルテキスト行頭マーカー: marker.png → markers.png の順でフォールバック（sstp.png は使わない）
-    let marker_img = cache.get("marker.png").or_else(|| cache.get("markers.png"));
+    // サンプルテキスト行頭マーカー（UKADOC仕様）
+    // s系: markers.png → marker.png → sstp.png
+    // k系: markerk.png → marker.png → sstp.png
+    // p系: markerp{n}def.png → marker.png → sstp.png
+    // sstp.png は marker*.png が存在しない旧バルーン向けの代用
+    let balloon_stem = balloon_name.trim_end_matches(".png");
+    let marker_img = if balloon_stem.starts_with("balloonk") {
+        cache.get("markerk.png")
+            .or_else(|| cache.get("marker.png"))
+            .or_else(|| cache.get("sstp.png"))
+    } else if balloon_stem.starts_with("balloonp") {
+        // 例: balloonp2def0 → markerp2def.png
+        let p_marker_key = {
+            let after = balloon_stem.trim_start_matches("balloonp");
+            if let Some(def_pos) = after.find("def") {
+                format!("markerp{}def.png", &after[..def_pos])
+            } else {
+                String::new()
+            }
+        };
+        let specific = if !p_marker_key.is_empty() { cache.get(p_marker_key.as_str()) } else { None };
+        specific
+            .or_else(|| cache.get("marker.png"))
+            .or_else(|| cache.get("sstp.png"))
+    } else {
+        // s系（デフォルト）
+        cache.get("markers.png")
+            .or_else(|| cache.get("marker.png"))
+            .or_else(|| cache.get("sstp.png"))
+    };
 
     let mut line_idx = 0usize;
     loop {

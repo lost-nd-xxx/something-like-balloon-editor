@@ -150,9 +150,16 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                     .find(|(name, _, _)| *name == group.name);
 
                 // 装飾なし判定: blendmethod キーが "none" のとき装飾なし
+                // 個別設定に blendmethod キーが存在しない場合は共通 descript_text を参照する
                 let decoration_off = if let Some((_, blend_key, _)) = deco_group {
-                    let descript_text = if use_individual {
+                    let indiv_text = if use_individual {
                         app.state.individual_texts.get(&cfg_key).cloned().unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    let indiv_has_key = parse_descript(&indiv_text).contains_key(*blend_key);
+                    let descript_text = if use_individual && indiv_has_key {
+                        indiv_text
                     } else {
                         app.state.descript_text.clone()
                     };

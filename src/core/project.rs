@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use encoding_rs::Encoding;
+use crate::gui::field_def::DECORATION_GROUPS;
+use crate::core::descript::{parse_descript, set_descript_value};
 
 /// プロジェクトが配置されるベースディレクトリ（実行ファイルと同じディレクトリの `projects` フォルダ）を返します。
 pub fn get_projects_base_dir() -> anyhow::Result<PathBuf> {
@@ -166,6 +168,14 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
             if ext == "txt" {
                 // txt ファイルは UTF-8 に変換してコピーする
                 convert_txt_to_utf8(&path, &dest)?;
+                // descript.txt / install.txt に charset,UTF-8 がなければ先頭行に追加
+                if file_name_lower == "descript.txt" || file_name_lower == "install.txt" {
+                    ensure_charset_utf8(&dest)?;
+                }
+                // descript.txt に cursor/anchor 装飾エントリがなければ補完
+                if file_name_lower == "descript.txt" {
+                    ensure_decoration_entries(&dest)?;
+                }
             } else {
                 fs::copy(&path, &dest)?;
             }
@@ -263,6 +273,50 @@ fn convert_txt_to_utf8(src: &Path, dest: &Path) -> anyhow::Result<()> {
 
     let (cow, _, _had_errors) = encoding.decode(&bytes);
     fs::write(dest, cow.as_bytes())?;
+    Ok(())
+}
+
+/// ファイルに `charset,` エントリがなければ先頭行に `charset,UTF-8` を追加する。
+fn ensure_charset_utf8(path: &Path) -> anyhow::Result<()> {
+    let text = fs::read_to_string(path)?;
+    // 既に charset, エントリがあれば何もしない
+    let has_charset = text.lines().any(|line| {
+        let t = line.trim();
+        !t.starts_with("//") && t.to_lowercase().starts_with("charset,")
+    });
+    if has_charset {
+        return Ok(());
+    }
+    // 先頭に charset,UTF-8 を追加
+    let new_text = format!("charset,UTF-8\n{}", text);
+    fs::write(path, new_text)?;
+    Ok(())
+}
+
+/// descript.txt に cursor/anchor 装飾エントリがない場合に補完する。
+///
+/// グループごとに独立して判定する：
+/// - blendmethod キーが存在しない → そのグループを「装飾なし」値で書き込む
+/// - blendmethod キーが存在する → そのグループは何もしない（ユーザー定義を尊重）
+fn ensure_decoration_entries(path: &Path) -> anyhow::Result<()> {
+    let text = fs::read_to_string(path)?;
+    let parsed = parse_descript(&text);
+
+    let mut new_text = text.clone();
+
+    for (_, blend_key, keys) in DECORATION_GROUPS {
+        if !parsed.contains_key(*blend_key) {
+            // blendmethod が無い → 装飾なし値で補完
+            new_text = set_descript_value(&new_text, blend_key, "none");
+            for (key, _on_default, off_val) in *keys {
+                new_text = set_descript_value(&new_text, key, off_val);
+            }
+        }
+    }
+
+    if new_text != text {
+        fs::write(path, new_text)?;
+    }
     Ok(())
 }
 
