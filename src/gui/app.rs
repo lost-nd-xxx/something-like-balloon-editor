@@ -20,6 +20,8 @@ pub struct BalloonEditorApp {
     pub preview_texture: Option<TextureHandle>,
     /// ダイアログ表示用メッセージ (title, body)
     pub dialog: Option<(String, String)>,
+    /// 出力完了ダイアログ表示中の出力先フォルダ（Some の間「フォルダを開く」ボタン付きダイアログを表示）
+    pub export_done_dir: Option<PathBuf>,
     /// バックグラウンドスレッドからのプレビュー結果受け取り用
     preview_result: Arc<Mutex<Option<RgbaImage>>>,
 }
@@ -53,6 +55,7 @@ impl BalloonEditorApp {
             root,
             preview_texture: None,
             dialog: None,
+            export_done_dir: None,
             preview_result: Arc::new(Mutex::new(None)),
         };
 
@@ -725,11 +728,10 @@ impl BalloonEditorApp {
             descript_out = crate::core::descript::set_descript_value(&descript_out, key, "1");
         }
 
-        // テキストファイルを出力
+        // テキストファイルを出力（readme は中身を触らず実ファイルを物理コピーする）
         let texts = [
             ("descript.txt", descript_out),
             ("install.txt",  self.state.install_text.clone()),
-            ("readme.txt",   self.state.readme_text.clone()),
         ];
         for (fname, text) in &texts {
             if !text.is_empty() {
@@ -738,6 +740,28 @@ impl BalloonEditorApp {
                     self.err(format!("{} の書き込みに失敗しました:\n{}", fname, e));
                     return;
                 }
+            }
+        }
+
+        // readme は descript.txt の "readme,ファイル名"（無ければ readme.txt）で
+        // 指定された実ファイルをプロジェクトからそのまま物理コピーする。
+        // アプリは中身・charset を一切編集しない。
+        let readme_name = {
+            let parsed = crate::core::descript::parse_descript(&self.state.descript_text);
+            let raw = parsed.get("readme").map(|s| s.as_str()).unwrap_or("readme.txt");
+            // パストラバーサル対策: ファイル名部分のみ使用
+            std::path::Path::new(raw)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("readme.txt")
+                .to_string()
+        };
+        let readme_src = ad.join(&readme_name);
+        if readme_src.is_file() {
+            let readme_dest = output_dir.join(&readme_name);
+            if let Err(e) = std::fs::copy(&readme_src, &readme_dest) {
+                self.err(format!("{} のコピーに失敗しました:\n{}", readme_name, e));
+                return;
             }
         }
 
@@ -766,9 +790,11 @@ impl BalloonEditorApp {
             if let Some(parts) = self.state.parts_cache.values().next() {
                 for name in parts.keys() { already.insert(name.to_lowercase()); }
             }
-            for fname in ["descript.txt", "install.txt", "readme.txt"] {
+            for fname in ["descript.txt", "install.txt"] {
                 already.insert(fname.to_string());
             }
+            // readme は実ファイル名（readme,ファイル名）で出力済み
+            already.insert(readme_name.to_lowercase());
             for cfg in self.state.individual_texts.keys() {
                 already.insert(cfg.to_lowercase());
             }
@@ -799,13 +825,9 @@ impl BalloonEditorApp {
             }
         }
 
-        let out_path = output_dir.clone();
-        self.dialog = Some(("出力完了".into(), format!(
-            "出力が完了しました。\n\n出力先:\n{}",
-            out_path.display()
-        )));
-        // 出力フォルダをエクスプローラーで開く
-        let _ = open::that(&output_dir);
+        // 出力完了ダイアログ（「フォルダを開く」ボタン付き）を表示する。
+        // 自動でエクスプローラは開かず、ユーザーの選択に委ねる。
+        self.export_done_dir = Some(output_dir.clone());
     }
 
     /// インポートキュー内の現在インデックスにあるファイルからUI入力値を自動推測してプレセットします。
@@ -1084,6 +1106,26 @@ impl eframe::App for BalloonEditorApp {
                     if ui.button("OK").clicked() {
                         self.dialog = None;
                     }
+                });
+        }
+
+        // 出力完了ダイアログ（「フォルダを開く」ボタン付き）
+        if let Some(out_dir) = self.export_done_dir.clone() {
+            egui::Window::new("出力完了")
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(format!("出力が完了しました。\n\n出力先:\n{}", out_dir.display()));
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("フォルダを開く").clicked() {
+                            let _ = open::that(&out_dir);
+                            self.export_done_dir = None;
+                        }
+                        if ui.button("閉じる").clicked() {
+                            self.export_done_dir = None;
+                        }
+                    });
                 });
         }
 

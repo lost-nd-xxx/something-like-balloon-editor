@@ -148,8 +148,13 @@
 
 - バルーン画像（`balloonk0〜`、`balloons0〜`、`balloonp*def0〜`、`balloonc0〜4` など）
 - パーツ画像（`arrow0/1`、`clickwait`、`online0〜`、`sstp`、`marker` など）
-- `descript.txt` / `install.txt` / `readme.txt`
+- `descript.txt` / `install.txt`
+- 説明テキスト（`readme.txt` など、後述）
 - 個別設定ファイル（差分が存在するバルーンのみ）
+
+出力が完了するとダイアログが表示されます。「フォルダを開く」を押すと出力先フォルダをエクスプローラで開きます。
+
+**説明テキストについて**: 説明テキストは `descript.txt` の `readme,ファイル名` で指定されたファイル名（指定が無ければ `readme.txt`）で、プロジェクト内の実ファイルをそのまま出力します。アプリは説明テキストの中身や文字コード（`readme.charset`）を編集しません。
 
 **注意**: 出力される `descript.txt` では `use_self_alpha`・`use_input_alpha`・`overlay_outside_balloon` が強制的に `1` で書き出されます。このアプリはPNGのアルファチャンネルを使って画像合成を行うため、これらを `0` にした場合の動作は保証されません。
 
