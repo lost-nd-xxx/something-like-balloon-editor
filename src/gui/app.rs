@@ -296,8 +296,15 @@ impl BalloonEditorApp {
     /// 物理ファイルが存在する場合のみリネームし、files.txt は常に更新する。
     pub fn rename_png(&mut self, old_name: &str, new_stem: &str, ctx: &Context) {
         let Some(asset_dir) = self.state.asset_dir() else { return };
-        let old_stem = old_name.trim_end_matches(".png");
-        let new_name = format!("{}.png", new_stem);
+        // 元ファイルの拡張子を保持する（.png / .pnr 等）
+        let ext = std::path::Path::new(old_name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("png");
+        let old_stem = old_name
+            .strip_suffix(&format!(".{}", ext))
+            .unwrap_or(old_name);
+        let new_name = format!("{}.{}", new_stem, ext);
 
         let old_path = asset_dir.join(old_name);
         let new_path = asset_dir.join(&new_name);
@@ -645,7 +652,7 @@ impl BalloonEditorApp {
         };
         for (name, img) in &balloon_images {
             let path = output_dir.join(name);
-            if let Err(e) = img.save(&path) {
+            if let Err(e) = save_png_optimized(img, &path) {
                 self.err(format!("{} の保存に失敗しました:\n{}", name, e));
                 return;
             }
@@ -655,7 +662,7 @@ impl BalloonEditorApp {
         if let Some(parts) = self.state.parts_cache.values().next() {
             for (name, img) in parts {
                 let path = output_dir.join(name);
-                if let Err(e) = img.save(&path) {
+                if let Err(e) = save_png_optimized(img, &path) {
                     self.err(format!("{} の保存に失敗しました:\n{}", name, e));
                     return;
                 }
@@ -690,6 +697,49 @@ impl BalloonEditorApp {
             if let Err(e) = std::fs::write(&path, text.as_bytes()) {
                 self.err(format!("{} の書き込みに失敗しました:\n{}", cfg, e));
                 return;
+            }
+        }
+
+        // アプリが合成・生成しない素材ファイル（thumbnail.png/.pnr、cursor画像など）を
+        // プロジェクトフォルダから物理コピーする。
+        // 既に出力済みのファイル名・テキスト類・profile/配下・.pna は対象外。
+        {
+            // 出力済みファイル名の集合を作る
+            let mut already: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for name in balloon_images.keys() { already.insert(name.to_lowercase()); }
+            if let Some(parts) = self.state.parts_cache.values().next() {
+                for name in parts.keys() { already.insert(name.to_lowercase()); }
+            }
+            for fname in ["descript.txt", "install.txt", "readme.txt"] {
+                already.insert(fname.to_string());
+            }
+            for cfg in self.state.individual_texts.keys() {
+                already.insert(cfg.to_lowercase());
+            }
+
+            if let Ok(entries) = std::fs::read_dir(&ad) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if !path.is_file() { continue; }
+                    let fname = match path.file_name().and_then(|n| n.to_str()) {
+                        Some(n) => n.to_string(),
+                        None => continue,
+                    };
+                    let fname_lower = fname.to_lowercase();
+                    // 既に出力済み・テキスト・.pna は対象外
+                    if already.contains(&fname_lower) { continue; }
+                    if fname_lower.ends_with(".txt") { continue; }
+                    if fname_lower.ends_with(".pna") { continue; }
+                    // 画像系（png/pnr/jpg等）のみコピー対象
+                    let is_image = [".png", ".pnr", ".jpg", ".jpeg", ".bmp"]
+                        .iter().any(|ext| fname_lower.ends_with(ext));
+                    if !is_image { continue; }
+                    let dest = output_dir.join(&fname);
+                    if let Err(e) = std::fs::copy(&path, &dest) {
+                        self.err(format!("{} のコピーに失敗しました:\n{}", fname, e));
+                        return;
+                    }
+                }
             }
         }
 
@@ -1345,7 +1395,17 @@ impl eframe::App for BalloonEditorApp {
         if self.state.show_rename_window {
             let mut close = false;
             let target = self.state.rename_target.clone();
-            let old_stem = target.trim_end_matches(".png").to_string();
+            // 元ファイルの拡張子を保持（.png / .pnr 等）
+            let target_ext = std::path::Path::new(&target)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("png")
+                .to_string();
+            let old_stem = std::path::Path::new(&target)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&target)
+                .to_string();
 
             egui::Window::new("名前変更")
                 .collapsible(false)
@@ -1358,7 +1418,7 @@ impl eframe::App for BalloonEditorApp {
                     ui.text_edit_singleline(&mut self.state.rename_new_name);
 
                     let new_stem = self.state.rename_new_name.trim().to_string();
-                    let new_name = format!("{}.png", new_stem);
+                    let new_name = format!("{}.{}", new_stem, target_ext);
                     let is_same = new_stem == old_stem;
                     let is_empty = new_stem.is_empty();
                     let already_exists = if !is_same && !is_empty {
@@ -1933,6 +1993,27 @@ fn setup_japanese_font(ctx: &egui::Context) {
     });
     style.spacing.button_padding = egui::vec2(6.0, 3.0);
     ctx.set_style(style);
+}
+
+/// RRGBA画像を高圧縮設定（CompressionType::Best + Adaptiveフィルタ）でPNG保存する。
+/// image クレートのデフォルト保存より小さいファイルサイズになる。
+fn save_png_optimized(img: &RgbaImage, path: &std::path::Path) -> anyhow::Result<()> {
+    use image::codecs::png::{PngEncoder, CompressionType, FilterType};
+    use image::ImageEncoder;
+    let file = std::fs::File::create(path)?;
+    let writer = std::io::BufWriter::new(file);
+    let encoder = PngEncoder::new_with_quality(
+        writer,
+        CompressionType::Best,
+        FilterType::Adaptive,
+    );
+    encoder.write_image(
+        img.as_raw(),
+        img.width(),
+        img.height(),
+        image::ExtendedColorType::Rgba8,
+    )?;
+    Ok(())
 }
 
 /// インポートダイアログ用プレビューテクスチャを生成する。

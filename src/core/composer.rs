@@ -20,8 +20,8 @@ pub fn open_png_rgba(path: &Path) -> anyhow::Result<RgbaImage> {
     }
 
     // 2/3/4. .pna なし: color_type で分岐
-    let dyn_img = image::open(path)
-        .map_err(|e| anyhow::anyhow!("{}: {}", path.display(), e))?;
+    // .pnr など非標準拡張子でも読めるよう、バイト列を PNG として読み込む
+    let dyn_img = open_image_any_ext(path)?;
 
     match dyn_img.color() {
         // 32bit RGBA: アルファそのまま
@@ -36,11 +36,29 @@ pub fn open_png_rgba(path: &Path) -> anyhow::Result<RgbaImage> {
     }
 }
 
+/// 拡張子に依存せず画像を読み込む。
+/// 標準拡張子（png/jpg等）は image::open、それ以外（pnr 等）は PNG として読み込む。
+fn open_image_any_ext(path: &Path) -> anyhow::Result<image::DynamicImage> {
+    let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase());
+    let is_standard = matches!(
+        ext.as_deref(),
+        Some("png" | "jpg" | "jpeg" | "bmp" | "gif" | "webp" | "tiff" | "tif")
+    );
+    if is_standard {
+        image::open(path).map_err(|e| anyhow::anyhow!("{}: {}", path.display(), e))
+    } else {
+        // pnr 等の非標準拡張子: 中身は PNG なのでバイト列を PNG としてデコード
+        let bytes = std::fs::read(path)
+            .map_err(|e| anyhow::anyhow!("{}: {}", path.display(), e))?;
+        image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+            .map_err(|e| anyhow::anyhow!("{}: {}", path.display(), e))
+    }
+}
+
 /// .pna ファイルをアルファチャンネルとして合成する
 /// .pna は拡張子が非標準のため image::open が使えない。ファイルバイト列を PNG としてデコードする。
 fn open_png_with_pna(png_path: &Path, pna_path: &Path) -> anyhow::Result<RgbaImage> {
-    let rgb = image::open(png_path)
-        .map_err(|e| anyhow::anyhow!("{}: {}", png_path.display(), e))?
+    let rgb = open_image_any_ext(png_path)?
         .to_rgb8();
 
     // .pna をバイト列として読み込み PNG デコード

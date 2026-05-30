@@ -45,7 +45,7 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
     // プロジェクトフォルダ内の全 PNG を収集（ソート済み）
     let png_list = collect_project_pngs(app);
 
-    let ph = egui::CollapsingHeader::new(egui::RichText::new("PNG一覧").strong())
+    let ph = egui::CollapsingHeader::new(egui::RichText::new("画像一覧").strong())
         .id_salt("png_header")
         .open(Some(app.state.png_list_open))
         .show(ui, |ui| {
@@ -58,7 +58,9 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                         ui.label("（PNGファイルなし）");
                     }
                     for (i, name) in png_list.iter().enumerate() {
-                        let stem = name.trim_end_matches(".png");
+                        // .png は拡張子を落として表示。.pnr 等はそのまま表示して区別する
+                        let label = if let Some(s) = name.strip_suffix(".png") { s } else { name.as_str() };
+                        let stem = label;
                         let selected = app.state.png_preview_name.as_deref() == Some(name.as_str());
                         let name_owned = name.clone();
                         ui.push_id(("png_item", i), |ui| {
@@ -97,7 +99,12 @@ fn balloon_context_menu(ui: &mut Ui, app: &mut BalloonEditorApp, name: &str, _ct
 /// PNG一覧の右クリックメニュー
 fn png_context_menu(ui: &mut Ui, app: &mut BalloonEditorApp, name: &str, _ctx: &Context) {
     if ui.button("名前変更…").clicked() {
-        let stem = name.trim_end_matches(".png").to_string();
+        // 拡張子（.png/.pnr 等）を除いた stem を初期値にする
+        let stem = std::path::Path::new(name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(name)
+            .to_string();
         app.state.rename_target = name.to_string();
         app.state.rename_new_name = stem;
         app.state.rename_warning = String::new();
@@ -114,11 +121,13 @@ fn png_context_menu(ui: &mut Ui, app: &mut BalloonEditorApp, name: &str, _ctx: &
 fn collect_project_pngs(app: &BalloonEditorApp) -> Vec<String> {
     let Some(asset_dir) = app.state.asset_dir() else { return Vec::new() };
     let Ok(entries) = std::fs::read_dir(&asset_dir) else { return Vec::new() };
+    // png / pnr（左上1ドット透過版）を画像一覧に含める
     let mut names: Vec<String> = entries
         .flatten()
         .filter_map(|e| {
             let path = e.path();
-            if path.extension().and_then(|x| x.to_str()) == Some("png") {
+            let ext = path.extension().and_then(|x| x.to_str())?.to_lowercase();
+            if ext == "png" || ext == "pnr" {
                 path.file_name()?.to_str().map(|s| s.to_string())
             } else {
                 None
