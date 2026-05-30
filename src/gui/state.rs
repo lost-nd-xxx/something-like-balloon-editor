@@ -245,8 +245,16 @@ pub struct AppState {
     // --- ファイル名変更UI ---
     pub show_rename_window: bool,
     pub rename_target: String,       // 変更前ファイル名（拡張子含む）
-    pub rename_new_name: String,     // 変更後ファイル名（拡張子なし）
+    pub rename_new_name: String,     // 変更後ファイル名（拡張子なし）、PNG一覧用
     pub rename_warning: String,
+    /// true = バルーンリスト由来（構造化入力UI）
+    pub rename_is_balloon: bool,
+    /// false = 通常バルーン（s/k/p系）、true = 入力ボックス（c系）
+    pub rename_balloon_is_c: bool,
+    /// スコープ番号（0=s系, 1=k系, 2以上=pNdef系）
+    pub rename_scope_num: i32,
+    /// ID番号
+    pub rename_id_num: u32,
 
     // --- files.txt エディタUI ---
     pub show_files_editor_window: bool,
@@ -382,6 +390,10 @@ impl AppState {
             rename_target: String::new(),
             rename_new_name: String::new(),
             rename_warning: String::new(),
+            rename_is_balloon: false,
+            rename_balloon_is_c: false,
+            rename_scope_num: 0,
+            rename_id_num: 0,
 
             // --- 画像インポートUI（キュー対応） ---
             show_import_window: false,
@@ -399,6 +411,33 @@ impl AppState {
             import_has_pna: false,
             import_preview_texture: None,
         }
+    }
+
+    /// 指定 stem のバルーン名が既に存在するか（リネーム重複判定用）。
+    /// 「物理ファイル（任意拡張子）が存在する」OR「files.txt に同名定義がある」場合に true。
+    pub fn balloon_name_exists(&self, stem: &str) -> bool {
+        // files.txt（slbe_files_text）の先頭カラムに同名定義があるか
+        let in_files_txt = self.slbe_files_text.lines().any(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with("//") || trimmed.is_empty() { return false; }
+            trimmed.split(',').next().map(|f| f.trim()) == Some(stem)
+        });
+        if in_files_txt { return true; }
+
+        // 物理ファイル（拡張子問わず stem 一致）が存在するか
+        if let Some(asset_dir) = self.asset_dir() {
+            if let Ok(entries) = std::fs::read_dir(&asset_dir) {
+                for e in entries.flatten() {
+                    let path = e.path();
+                    let fstem = path.file_stem().and_then(|s| s.to_str());
+                    // .pna は対象外（アルファ用の付随ファイル）
+                    let ext = path.extension().and_then(|x| x.to_str()).map(|x| x.to_lowercase());
+                    if ext.as_deref() == Some("pna") { continue; }
+                    if fstem == Some(stem) { return true; }
+                }
+            }
+        }
+        false
     }
 
     /// 選択中バルーンが balloonc 系かどうか

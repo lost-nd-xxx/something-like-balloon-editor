@@ -83,10 +83,37 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
 /// バルーンリストの右クリックメニュー
 fn balloon_context_menu(ui: &mut Ui, app: &mut BalloonEditorApp, name: &str, _ctx: &Context) {
     if ui.button("名前変更…").clicked() {
-        let stem = name.trim_end_matches(".png").to_string();
+        let stem = name.trim_end_matches(".png");
         app.state.rename_target = name.to_string();
-        app.state.rename_new_name = stem;
         app.state.rename_warning = String::new();
+        app.state.rename_is_balloon = true;
+        // stem からスコープ番号・ID番号・c系フラグを逆算してプリセット
+        if stem.starts_with("balloonc") {
+            app.state.rename_balloon_is_c = true;
+            app.state.rename_id_num = stem.strip_prefix("balloonc")
+                .and_then(|s| s.parse().ok()).unwrap_or(0);
+            app.state.rename_scope_num = 0;
+        } else {
+            app.state.rename_balloon_is_c = false;
+            if stem.starts_with("balloons") {
+                app.state.rename_scope_num = 0;
+                app.state.rename_id_num = stem.strip_prefix("balloons")
+                    .and_then(|s| s.parse().ok()).unwrap_or(0);
+            } else if stem.starts_with("balloonk") {
+                app.state.rename_scope_num = 1;
+                app.state.rename_id_num = stem.strip_prefix("balloonk")
+                    .and_then(|s| s.parse().ok()).unwrap_or(0);
+            } else if stem.starts_with("balloonp") && stem.contains("def") {
+                let parts: Vec<&str> = stem.splitn(2, "def").collect();
+                app.state.rename_scope_num = parts[0].strip_prefix("balloonp")
+                    .and_then(|s| s.parse().ok()).unwrap_or(2);
+                app.state.rename_id_num = parts.get(1)
+                    .and_then(|s| s.parse().ok()).unwrap_or(0);
+            } else {
+                app.state.rename_scope_num = 0;
+                app.state.rename_id_num = 0;
+            }
+        }
         app.state.show_rename_window = true;
         ui.close_menu();
     }

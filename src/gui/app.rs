@@ -364,11 +364,33 @@ impl BalloonEditorApp {
     pub fn request_delete_png(&mut self, name: &str) {
         let Some(asset_dir) = self.state.asset_dir() else { return };
         let path = asset_dir.join(name);
-        let stem = name.trim_end_matches(".png");
+        let stem = std::path::Path::new(name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(name);
         let pna_path = asset_dir.join(format!("{}.pna", stem));
         let cfg_path = asset_dir.join(format!("{}s.txt", stem));
-        let has_pna = pna_path.exists();
-        let has_cfg = cfg_path.exists();
+        let has_file = path.exists();
+        let has_pna  = pna_path.exists();
+        let has_cfg  = cfg_path.exists();
+
+        if !has_file {
+            // 物理ファイルなし（files.txt 定義のみのバルーン）
+            // files.txt から該当行を削除するか確認する
+            let confirmed = rfd::MessageDialog::new()
+                .set_title("削除確認")
+                .set_description(format!(
+                    "「{}」は画像ファイルを持たず、レイアウト定義（files.txt）のみに存在します。\n\nfiles.txt の定義を削除しますか？",
+                    name
+                ))
+                .set_buttons(rfd::MessageButtons::YesNo)
+                .show() == rfd::MessageDialogResult::Yes;
+            if confirmed {
+                self.remove_balloon_from_files_txt(stem);
+                self.state.pending_reload = true;
+            }
+            return;
+        }
 
         let mut extras = Vec::new();
         if has_pna { extras.push(format!("{}.pna", stem)); }
@@ -399,8 +421,34 @@ impl BalloonEditorApp {
                     self.err(format!("{}s.txt の削除に失敗しました:\n{}", stem, e));
                 }
             }
+            // files.txt からも定義行を削除する
+            self.remove_balloon_from_files_txt(stem);
             // 削除後は next_reload フラグを立てておく（ctx がここでは使えないため）
             self.state.pending_reload = true;
+        }
+    }
+
+    /// files.txt（slbe_files_text）から指定 stem のバルーン定義行を削除してディスクに書き出す
+    fn remove_balloon_from_files_txt(&mut self, stem: &str) {
+        if self.state.slbe_files_text.is_empty() { return; }
+        let updated: String = self.state.slbe_files_text
+            .lines()
+            .filter(|line| {
+                let trimmed = line.trim();
+                if trimmed.starts_with("//") || trimmed.is_empty() { return true; }
+                // 先頭カラム（バルーン名）が stem と一致する行を除去
+                let first = trimmed.split(',').next().unwrap_or("").trim();
+                first != stem
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let updated = format!("{}\n", updated);
+        self.state.slbe_files_text = updated.clone();
+        if let Some(asset_dir) = self.state.asset_dir() {
+            let files_txt = crate::core::layout::slbe_files_txt_path(&asset_dir);
+            if files_txt.exists() {
+                let _ = std::fs::write(&files_txt, &updated);
+            }
         }
     }
 
@@ -1415,58 +1463,150 @@ impl eframe::App for BalloonEditorApp {
                 .unwrap_or(&target)
                 .to_string();
 
-            egui::Window::new("名前変更")
-                .collapsible(false)
-                .resizable(false)
-                .fixed_size([340.0, 150.0])
-                .show(ctx, |ui| {
-                    ui.label(format!("変更前: {}", old_stem));
-                    ui.add_space(4.0);
-                    ui.label("新しい名前:");
-                    ui.text_edit_singleline(&mut self.state.rename_new_name);
-
-                    let new_stem = self.state.rename_new_name.trim().to_string();
-                    let new_name = format!("{}.{}", new_stem, target_ext);
-                    let is_same = new_stem == old_stem;
-                    let is_empty = new_stem.is_empty();
-                    let already_exists = if !is_same && !is_empty {
-                        self.state.asset_dir()
-                            .map(|d| d.join(&new_name).exists())
-                            .unwrap_or(false)
-                    } else { false };
-
-                    self.state.rename_warning = if is_empty || is_same {
-                        String::new()
-                    } else if already_exists {
-                        "[!] 同名のファイルが既に存在します。".to_string()
+            if self.state.rename_is_balloon {
+                // ── バルーンリスト由来：構造化入力UI ──────────────────────
+                // スコープ番号・ID番号から変更後ファイル名を生成するヘルパー
+                let make_stem = |is_c: bool, scope: i32, id: u32| -> String {
+                    if is_c {
+                        format!("balloonc{}", id)
                     } else {
-                        String::new()
-                    };
-
-                    if !self.state.rename_warning.is_empty() {
-                        ui.colored_label(egui::Color32::from_rgb(220, 80, 80), &self.state.rename_warning.clone());
-                    } else {
-                        ui.label("");
+                        match scope {
+                            0 => format!("balloons{}", id),
+                            1 => format!("balloonk{}", id),
+                            n => format!("balloonp{}def{}", n, id),
+                        }
                     }
+                };
 
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        let can_rename = !is_empty && !is_same && !already_exists;
-                        if ui.add_enabled(can_rename, egui::Button::new("変更")).clicked() {
-                            let new_stem = new_stem.clone();
-                            self.rename_png(&target, &new_stem, ctx);
-                            close = true;
+                egui::Window::new("名前変更")
+                    .collapsible(false)
+                    .resizable(false)
+                    .fixed_size([300.0, 180.0])
+                    .show(ctx, |ui| {
+                        ui.label(format!("変更前: {}", old_stem));
+                        ui.add_space(6.0);
+
+                        // 種別ラジオボタン
+                        ui.horizontal(|ui| {
+                            ui.label("種別:");
+                            ui.radio_value(&mut self.state.rename_balloon_is_c, false, "通常バルーン（s/k/p系）");
+                            ui.radio_value(&mut self.state.rename_balloon_is_c, true,  "入力ボックス（c系）");
+                        });
+
+                        ui.add_space(4.0);
+
+                        if self.state.rename_balloon_is_c {
+                            // c系: ID番号 0〜4
+                            ui.horizontal(|ui| {
+                                ui.label("ID番号:");
+                                ui.add(egui::DragValue::new(&mut self.state.rename_id_num).range(0..=4));
+                            });
+                        } else {
+                            // s/k/p系: スコープ番号 + ID番号
+                            ui.horizontal(|ui| {
+                                ui.label("スコープ番号:");
+                                ui.add(egui::DragValue::new(&mut self.state.rename_scope_num).range(0..=99));
+                                let n = self.state.rename_scope_num;
+                                ui.small(format!("({}人目)", n + 1));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("ID番号:");
+                                ui.add(egui::DragValue::new(&mut self.state.rename_id_num).range(0..=999));
+                            });
                         }
-                        if ui.button("キャンセル").clicked() {
-                            close = true;
+
+                        ui.add_space(4.0);
+                        let new_stem = make_stem(
+                            self.state.rename_balloon_is_c,
+                            self.state.rename_scope_num,
+                            self.state.rename_id_num,
+                        );
+                        let is_same = new_stem == old_stem;
+                        // 物理ファイル OR files.txt 定義のいずれかに同名があれば重複
+                        let already_exists = !is_same && self.state.balloon_name_exists(&new_stem);
+
+                        self.state.rename_warning = if already_exists {
+                            "[!] 同名のバルーンが既に存在します。".to_string()
+                        } else {
+                            String::new()
+                        };
+
+                        ui.label(format!("変更後: {}", new_stem));
+                        if !self.state.rename_warning.is_empty() {
+                            ui.colored_label(egui::Color32::from_rgb(220, 80, 80), &self.state.rename_warning.clone());
+                        } else {
+                            ui.label("");
                         }
+
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            let can_rename = !is_same && !already_exists;
+                            if ui.add_enabled(can_rename, egui::Button::new("変更")).clicked() {
+                                self.rename_png(&target, &new_stem, ctx);
+                                close = true;
+                            }
+                            if ui.button("キャンセル").clicked() {
+                                close = true;
+                            }
+                        });
                     });
-                });
+            } else {
+                // ── PNG一覧由来：自由テキスト入力UI ──────────────────────
+                egui::Window::new("名前変更")
+                    .collapsible(false)
+                    .resizable(false)
+                    .fixed_size([340.0, 150.0])
+                    .show(ctx, |ui| {
+                        ui.label(format!("変更前: {}", old_stem));
+                        ui.add_space(4.0);
+                        ui.label("新しい名前:");
+                        ui.text_edit_singleline(&mut self.state.rename_new_name);
+
+                        let new_stem = self.state.rename_new_name.trim().to_string();
+                        let new_name = format!("{}.{}", new_stem, target_ext);
+                        let is_same = new_stem == old_stem;
+                        let is_empty = new_stem.is_empty();
+                        let already_exists = if !is_same && !is_empty {
+                            self.state.asset_dir()
+                                .map(|d| d.join(&new_name).exists())
+                                .unwrap_or(false)
+                        } else { false };
+
+                        self.state.rename_warning = if is_empty || is_same {
+                            String::new()
+                        } else if already_exists {
+                            "[!] 同名のファイルが既に存在します。".to_string()
+                        } else {
+                            String::new()
+                        };
+
+                        if !self.state.rename_warning.is_empty() {
+                            ui.colored_label(egui::Color32::from_rgb(220, 80, 80), &self.state.rename_warning.clone());
+                        } else {
+                            ui.label("");
+                        }
+
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            let can_rename = !is_empty && !is_same && !already_exists;
+                            if ui.add_enabled(can_rename, egui::Button::new("変更")).clicked() {
+                                let new_stem = new_stem.clone();
+                                self.rename_png(&target, &new_stem, ctx);
+                                close = true;
+                            }
+                            if ui.button("キャンセル").clicked() {
+                                close = true;
+                            }
+                        });
+                    });
+            }
+
             if close {
                 self.state.show_rename_window = false;
                 self.state.rename_target.clear();
                 self.state.rename_new_name.clear();
                 self.state.rename_warning.clear();
+                self.state.rename_is_balloon = false;
             }
         }
 
