@@ -16,6 +16,11 @@ fn field_defaults() -> std::collections::HashMap<&'static str, &'static str> {
 }
 
 pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
+    // プレビューテクスチャが未作成なら生成（ヘッダーで画像サイズを表示するため先に確保）
+    if app.preview_texture.is_none() {
+        app.refresh_preview_texture(ctx);
+    }
+
     // ヘッダー行：「プレビュー」ラベル ＋ コントラスト比
     ui.horizontal(|ui| {
         ui.strong("プレビュー");
@@ -25,11 +30,6 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
         }
     });
     ui.separator();
-
-    // プレビューテクスチャが未作成なら生成
-    if app.preview_texture.is_none() {
-        app.refresh_preview_texture(ctx);
-    }
 
     let available = ui.available_size();
     // プレビュー領域の rect（画像描画とオーバーレイの中央計算に使う）
@@ -74,6 +74,23 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 egui::Color32::WHITE,
             );
+
+            // キャンバス右下に画像サイズを矩形背景付きで表示
+            {
+                let label = format!("{}×{} px", img_size.x as i32, img_size.y as i32);
+                let font_id = egui::FontId::monospace(12.0);
+                let galley = ui.ctx().fonts(|f| {
+                    f.layout_no_wrap(label, font_id, egui::Color32::WHITE)
+                });
+                let pad = egui::vec2(6.0, 3.0);
+                let margin = egui::vec2(4.0, 4.0);
+                let bg_size = galley.size() + pad * 2.0;
+                // 右下基準: キャンバス右下からマージンとラベルサイズ分を引く
+                let bg_pos = canvas_rect.max - margin - bg_size;
+                let bg_rect = egui::Rect::from_min_size(bg_pos, bg_size);
+                painter.rect_filled(bg_rect, 4.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 160));
+                painter.galley(bg_pos + pad, galley, egui::Color32::WHITE);
+            }
 
             // ドラッグ位置編集モードの処理
             if app.state.drag_edit_target.is_some() {

@@ -80,7 +80,7 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
             ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
                 if ui.button("バルーンとして出力  (Ctrl+E)").clicked() {
                     ui.close_menu();
-                    app.export();
+                    app.pending_export = true;
                 }
             });
         });

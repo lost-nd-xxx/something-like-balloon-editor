@@ -22,6 +22,10 @@ pub struct BalloonEditorApp {
     pub dialog: Option<(String, String)>,
     /// 出力完了ダイアログ表示中の出力先フォルダ（Some の間「フォルダを開く」ボタン付きダイアログを表示）
     pub export_done_dir: Option<PathBuf>,
+    /// 出力要求フラグ。立つと次フレームで「出力中…」描画後に実際の出力を実行する。
+    pub pending_export: bool,
+    /// 「出力中…」オーバーレイを1フレーム描画済みか（描画→次フレームで実行のため）
+    pub export_overlay_drawn: bool,
     /// バックグラウンドスレッドからのプレビュー結果受け取り用
     preview_result: Arc<Mutex<Option<RgbaImage>>>,
 }
@@ -56,6 +60,8 @@ impl BalloonEditorApp {
             preview_texture: None,
             dialog: None,
             export_done_dir: None,
+            pending_export: false,
+            export_overlay_drawn: false,
             preview_result: Arc::new(Mutex::new(None)),
         };
 
@@ -395,13 +401,18 @@ impl BalloonEditorApp {
             return;
         }
 
+        // 付随ファイル（ファイル名 + 種別の説明）を列挙する
         let mut extras = Vec::new();
-        if has_pna { extras.push(format!("{}.pna", stem)); }
-        if has_cfg { extras.push(format!("{}s.txt", stem)); }
+        if has_pna { extras.push(format!("{}.pna（アルファチャンネル画像）", stem)); }
+        if has_cfg { extras.push(format!("{}s.txt（個別設定ファイル）", stem)); }
         let desc = if extras.is_empty() {
             format!("「{}」をゴミ箱に移動しますか？", name)
         } else {
-            format!("「{}」および「{}」をゴミ箱に移動しますか？", name, extras.join("」「"))
+            format!(
+                "「{}」をゴミ箱に移動しますか？\n\n以下の付随ファイルも同時に削除されます:\n・{}",
+                name,
+                extras.join("\n・")
+            )
         };
 
         let confirmed = rfd::MessageDialog::new()
@@ -1059,6 +1070,14 @@ impl eframe::App for BalloonEditorApp {
         if self.state.pending_reload {
             self.state.pending_reload = false;
             self.reload_asset_folder_keep_texts(ctx);
+        }
+
+        // 出力の遅延実行: 前フレームで「出力中…」オーバーレイを描画済みなら、
+        // このフレームで実際の出力（同期・重い処理）を行う。
+        if self.pending_export && self.export_overlay_drawn {
+            self.pending_export = false;
+            self.export_overlay_drawn = false;
+            self.export();
         }
 
         // ドラッグ＆ドロップされたファイルの捕捉
@@ -1952,7 +1971,7 @@ impl eframe::App for BalloonEditorApp {
                   || (i.key_pressed(egui::Key::Z) && i.modifiers.ctrl && i.modifiers.shift),
             refresh: i.key_pressed(egui::Key::F5),
         });
-        if keys.export  { self.export(); }
+        if keys.export  { self.pending_export = true; }
         if keys.save && self.state.is_project_dir() { self.save_project(); }
         if keys.undo {
             if self.state.undo() { self.rebuild_selected_and_refresh(ctx); }
@@ -2003,6 +2022,38 @@ impl eframe::App for BalloonEditorApp {
 
         // files.txt エディタウィンドウ
         panels::files_editor::show(self, ctx);
+
+        // 出力中オーバーレイ: pending_export が立っている間、画面中央に「出力中…」を表示する。
+        // 描画した最初のフレームで export_overlay_drawn を立て、次フレームで実出力を行う
+        // （実出力は同期・重い処理のため、先にこの表示を1フレーム見せる）。
+        if self.pending_export {
+            let screen = ctx.screen_rect();
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("export_overlay"),
+            ));
+            // 画面全体を半透明で覆う
+            painter.rect_filled(screen, 0.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 100));
+            let label = "出力中…";
+            let font_id = egui::FontId::proportional(20.0);
+            let galley = ctx.fonts(|f| {
+                f.layout_no_wrap(label.to_string(), font_id, egui::Color32::WHITE)
+            });
+            let text_size = galley.size();
+            let pad = egui::vec2(20.0, 12.0);
+            let bg_size = text_size + pad * 2.0;
+            let bg_pos = egui::pos2(
+                screen.center().x - bg_size.x / 2.0,
+                screen.center().y - bg_size.y / 2.0,
+            );
+            let bg_rect = egui::Rect::from_min_size(bg_pos, bg_size);
+            painter.rect_filled(bg_rect, 8.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 220));
+            painter.galley(bg_pos + pad, galley, egui::Color32::WHITE);
+
+            // このフレームで描画した印を付け、次フレームを要求する（次フレームで実出力）
+            self.export_overlay_drawn = true;
+            ctx.request_repaint();
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
