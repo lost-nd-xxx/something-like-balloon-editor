@@ -695,7 +695,13 @@ impl BalloonEditorApp {
 
         // 個別設定ファイルを出力
         for (cfg, text) in &self.state.individual_texts.clone() {
-            let path = output_dir.join(cfg);
+            // パストラバーサル対策: ファイル名部分のみ使用
+            let cfg_safe = std::path::Path::new(cfg)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if cfg_safe.is_empty() { continue; }
+            let path = output_dir.join(cfg_safe);
             if let Err(e) = std::fs::write(&path, text.as_bytes()) {
                 self.err(format!("{} の書き込みに失敗しました:\n{}", cfg, e));
                 return;
