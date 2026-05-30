@@ -171,7 +171,7 @@ pub fn draw_preview(
     if opts.is_balloonc {
         draw_communicatebox(&mut img, &parsed, parts_cache, &opts.balloon_name, &font_name, parsed_font_ref, &mut sess);
     } else {
-        draw_parts(&mut img, &parsed, parts_cache, w, h, &font_name, parsed_font_ref, no_aa, &mut sess);
+        draw_parts(&mut img, &parsed, parts_cache, w, h, &opts.balloon_name, &font_name, parsed_font_ref, no_aa, &mut sess);
         draw_sample_text(&mut img, &parsed, &vr, parts_cache, opts.mode, &opts.balloon_name, &font_name, parsed_font_ref, no_aa, &mut sess);
     }
 
@@ -512,6 +512,7 @@ fn draw_parts(
     parsed: &HashMap<String, String>,
     cache: &HashMap<String, RgbaImage>,
     _w: i32, _h: i32,
+    balloon_name: &str,
     font_name: &str,
     font: Option<&fontdue::Font>,
     _no_aa: bool,
@@ -519,27 +520,50 @@ fn draw_parts(
 ) {
     let (iw, ih) = (img.width() as i32, img.height() as i32);
 
-    macro_rules! paste {
-        ($name:expr, $x:expr, $y:expr) => {
-            if let Some(p) = cache.get($name) { alpha_paste(img, p, $x, $y); }
-        };
+    // バルーン種別に応じた arrow/clickwait ファイル名を解決する
+    // s系: arrows{d}.png → arrow{d}.png
+    // k系: arrowk{d}.png → arrow{d}.png
+    // p系: arrowp{n}def{d}.png → arrow{d}.png
+    let balloon_stem = balloon_name.trim_end_matches(".png");
+    let p_num = if balloon_stem.starts_with("balloonp") {
+        let after = balloon_stem.trim_start_matches("balloonp");
+        after.find("def").map(|i| after[..i].to_string()).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    // arrow0
+    let arrow0_img: Option<&RgbaImage> = if balloon_stem.starts_with("balloonk") {
+        cache.get("arrowk0.png").or_else(|| cache.get("arrow0.png"))
+    } else if balloon_stem.starts_with("balloonp") && !p_num.is_empty() {
+        let key = format!("arrowp{}def0.png", p_num);
+        cache.get(key.as_str()).or_else(|| cache.get("arrow0.png"))
+    } else {
+        cache.get("arrows0.png").or_else(|| cache.get("arrow0.png"))
+    };
+    let arrow0_def_x = arrow0_img.map(|a| format!("-{}", 5 + a.width())).unwrap_or_else(|| "-5".to_string());
+    if let Some(a) = arrow0_img {
+        let x = pos_str(parsed.get("arrow0.x").map(|s| s.as_str()).unwrap_or(&arrow0_def_x), iw);
+        let y = pos_str(parsed.get("arrow0.y").map(|s| s.as_str()).unwrap_or("5"), ih);
+        alpha_paste(img, a, x, y);
     }
 
-    // arrow0 デフォルト X: -(5 + 画像幅)
-    let arrow0_def_x = cache.get("arrow0.png")
-        .map(|a| format!("-{}", 5 + a.width())).unwrap_or_else(|| "-5".to_string());
-    // arrow1 デフォルト X: -(5 + 画像幅), Y: -(5 + 画像高さ)
-    let arrow1_def_x = cache.get("arrow1.png")
-        .map(|a| format!("-{}", 5 + a.width())).unwrap_or_else(|| "-5".to_string());
-    let arrow1_def_y = cache.get("arrow1.png")
-        .map(|a| format!("-{}", 5 + a.height())).unwrap_or_else(|| "-5".to_string());
-
-    paste!("arrow0.png",
-        pos_str(parsed.get("arrow0.x").map(|s| s.as_str()).unwrap_or(&arrow0_def_x), iw),
-        pos_str(parsed.get("arrow0.y").map(|s| s.as_str()).unwrap_or("5"),  ih));
-    paste!("arrow1.png",
-        pos_str(parsed.get("arrow1.x").map(|s| s.as_str()).unwrap_or(&arrow1_def_x), iw),
-        pos_str(parsed.get("arrow1.y").map(|s| s.as_str()).unwrap_or(&arrow1_def_y), ih));
+    // arrow1
+    let arrow1_img: Option<&RgbaImage> = if balloon_stem.starts_with("balloonk") {
+        cache.get("arrowk1.png").or_else(|| cache.get("arrow1.png"))
+    } else if balloon_stem.starts_with("balloonp") && !p_num.is_empty() {
+        let key = format!("arrowp{}def1.png", p_num);
+        cache.get(key.as_str()).or_else(|| cache.get("arrow1.png"))
+    } else {
+        cache.get("arrows1.png").or_else(|| cache.get("arrow1.png"))
+    };
+    let arrow1_def_x = arrow1_img.map(|a| format!("-{}", 5 + a.width())).unwrap_or_else(|| "-5".to_string());
+    let arrow1_def_y = arrow1_img.map(|a| format!("-{}", 5 + a.height())).unwrap_or_else(|| "-5".to_string());
+    if let Some(a) = arrow1_img {
+        let x = pos_str(parsed.get("arrow1.x").map(|s| s.as_str()).unwrap_or(&arrow1_def_x), iw);
+        let y = pos_str(parsed.get("arrow1.y").map(|s| s.as_str()).unwrap_or(&arrow1_def_y), ih);
+        alpha_paste(img, a, x, y);
+    }
 
     if let Some(onl) = cache.get("online0.png") {
         let ow = onl.width() as i32;
@@ -562,8 +586,16 @@ fn draw_parts(
         alpha_paste(img, sm, sx, sy);
     }
 
-    if let Some(cw) = cache.get("clickwait.png") {
-        // デフォルト: clickwait画像があれば -(10+幅)/-(10+高さ)、なければ arrow1 のデフォルトと同じ
+    // clickwait: 種別対応（s系: clickwaits.png、k系: clickwaitk.png、p系: clickwaitp{n}def.png）→ clickwait.png
+    let clickwait_img = if balloon_stem.starts_with("balloonk") {
+        cache.get("clickwaitk.png").or_else(|| cache.get("clickwait.png"))
+    } else if balloon_stem.starts_with("balloonp") && !p_num.is_empty() {
+        let specific = format!("clickwaitp{}def.png", p_num);
+        cache.get(specific.as_str()).or_else(|| cache.get("clickwait.png"))
+    } else {
+        cache.get("clickwaits.png").or_else(|| cache.get("clickwait.png"))
+    };
+    if let Some(cw) = clickwait_img {
         let cw_def_x = format!("-{}", 10 + cw.width());
         let cw_def_y = format!("-{}", 10 + cw.height());
         let cx = parsed.get("clickwaitmarker.x").map(|s| pos_str(s, iw))
