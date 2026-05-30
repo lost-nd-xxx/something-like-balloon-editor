@@ -703,7 +703,7 @@ impl BalloonEditorApp {
     }
 
     /// インポートキュー内の現在インデックスにあるファイルからUI入力値を自動推測してプレセットします。
-    pub fn preset_import_from_current_queue(&mut self) {
+    pub fn preset_import_from_current_queue(&mut self, ctx: &egui::Context) {
         let idx = self.state.import_queue_index;
         if idx >= self.state.import_queue.len() {
             return;
@@ -831,6 +831,9 @@ impl BalloonEditorApp {
             self.state.import_custom_filename = filename.clone();
             self.state.import_target_id_num = 0;
         }
+
+        // インポート画像のプレビューテクスチャを生成
+        self.state.import_preview_texture = load_import_preview_texture(ctx, path);
     }
 
     /// 各種UI入力パラメータから、最終保存用のファイル名を組み立てて返します。
@@ -948,7 +951,7 @@ impl eframe::App for BalloonEditorApp {
                     self.state.import_queue = png_files;
                     self.state.import_queue_index = 0;
                     self.state.show_import_window = true;
-                    self.preset_import_from_current_queue();
+                    self.preset_import_from_current_queue(ctx);
                 }
             }
         }
@@ -1387,13 +1390,13 @@ impl eframe::App for BalloonEditorApp {
                 egui::Window::new("画像インポート設定")
                     .collapsible(false)
                     .resizable(false)
-                    .fixed_size([520.0, 360.0])
+                    .fixed_size([740.0, 360.0])
                     .show(ctx, |ui| {
                         ui.colored_label(egui::Color32::from_rgb(29, 106, 184), format!("インポート画像 ({} / {} 枚目):", idx + 1, self.state.import_queue.len()));
                         ui.label(format!("ファイル名: {}", filename));
                         ui.add_space(6.0);
 
-                        // カテゴリ選択（左）＋ パラメータ（右）の左右分割レイアウト
+                        // カテゴリ選択（左）＋ パラメータ（中）＋ プレビュー（右）の左右分割レイアウト
                         ui.horizontal(|ui| {
                             // 左側: カテゴリ縦リスト
                             ui.vertical(|ui| {
@@ -1507,6 +1510,25 @@ impl eframe::App for BalloonEditorApp {
                                     }
                                 }
                             });
+
+                            ui.separator();
+
+                            // 右側: インポート画像プレビュー
+                            ui.vertical(|ui| {
+                                ui.set_min_width(180.0);
+                                ui.label("プレビュー:");
+                                if let Some(tex) = &self.state.import_preview_texture {
+                                    let [tw, th] = tex.size();
+                                    // 最大 160×160 に収まるようスケーリング
+                                    const MAX: f32 = 160.0;
+                                    let scale = (MAX / tw as f32).min(MAX / th as f32).min(1.0);
+                                    let disp = egui::vec2(tw as f32 * scale, th as f32 * scale);
+                                    ui.image((tex.id(), disp));
+                                    ui.small(format!("{}×{} px", tw, th));
+                                } else {
+                                    ui.label("(読み込み失敗)");
+                                }
+                            });
                         });
 
                         let target_filename = self.get_import_target_filename();
@@ -1603,7 +1625,7 @@ impl eframe::App for BalloonEditorApp {
                         self.reload_asset_folder_keep_texts(ctx);
                         close = true;
                     } else {
-                        self.preset_import_from_current_queue();
+                        self.preset_import_from_current_queue(ctx);
                     }
                 }
                 if close {
@@ -1896,4 +1918,35 @@ fn setup_japanese_font(ctx: &egui::Context) {
     });
     style.spacing.button_padding = egui::vec2(6.0, 3.0);
     ctx.set_style(style);
+}
+
+/// インポートダイアログ用プレビューテクスチャを生成する。
+/// 画像をチェッカー背景に合成してから egui テクスチャとして返す。
+fn load_import_preview_texture(ctx: &egui::Context, path: &std::path::Path) -> Option<egui::TextureHandle> {
+    let img = image::open(path).ok()?.into_rgba8();
+    let (w, h) = img.dimensions();
+
+    // チェッカー背景（8px ごとに明暗切り替え）に画像を合成
+    const CELL: u32 = 8;
+    const LIGHT: [u8; 4] = [200, 200, 200, 255];
+    const DARK:  [u8; 4] = [140, 140, 140, 255];
+
+    let mut pixels: Vec<u8> = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let checker = if ((x / CELL) + (y / CELL)) % 2 == 0 { LIGHT } else { DARK };
+            let src = img.get_pixel(x, y).0;
+            let a = src[3] as f32 / 255.0;
+            let r = (src[0] as f32 * a + checker[0] as f32 * (1.0 - a)) as u8;
+            let g = (src[1] as f32 * a + checker[1] as f32 * (1.0 - a)) as u8;
+            let b = (src[2] as f32 * a + checker[2] as f32 * (1.0 - a)) as u8;
+            pixels.extend_from_slice(&[r, g, b, 255]);
+        }
+    }
+
+    let color_image = ColorImage::from_rgba_unmultiplied(
+        [w as usize, h as usize],
+        &pixels,
+    );
+    Some(ctx.load_texture("import_preview", color_image, TextureOptions::NEAREST))
 }

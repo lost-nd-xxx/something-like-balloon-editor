@@ -63,7 +63,7 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                             app.state.import_queue = files;
                             app.state.import_queue_index = 0;
                             app.state.show_import_window = true;
-                            app.preset_import_from_current_queue();
+                            app.preset_import_from_current_queue(ctx);
                         }
                     }
                 }

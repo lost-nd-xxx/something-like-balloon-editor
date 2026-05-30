@@ -271,6 +271,8 @@ pub struct AppState {
     pub import_custom_filename: String,
     /// D&Dファイルに同名 .pna が存在するか（情報表示用）
     pub import_has_pna: bool,
+    /// インポートダイアログ用プレビューテクスチャ（現在のキュー画像）
+    pub import_preview_texture: Option<egui::TextureHandle>,
 }
 
 /// テキスト・数値入力の編集中バッファ
@@ -395,6 +397,7 @@ impl AppState {
             import_inputbtn_state: "up".to_string(),
             import_custom_filename: String::new(),
             import_has_pna: false,
+            import_preview_texture: None,
         }
     }
 
