@@ -69,7 +69,7 @@
 
 ## ライセンス
 
-MIT License — 詳細は [LICENSE](LICENSE) ファイルを参照してください。
+MIT License — 詳細は [LICENSE.txt](LICENSE.txt) ファイルを参照してください。
 
 ### 使用ライブラリ
 
