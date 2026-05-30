@@ -32,15 +32,23 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
     }
 
     let available = ui.available_size();
-    // プレビュー領域の rect（オーバーレイの中央計算に使う）
-    // clip_rect() はパネルの描画クリップ領域全体を返すため中央計算に適している
-    let canvas_rect = ui.clip_rect();
+    // プレビュー領域の rect（画像描画とオーバーレイの中央計算に使う）
+    // available_rect_before_wrap() はヘッダー（ラベル・コントラスト比）の下から始まる
+    // 残り領域を返すため、ヘッダーを隠さずに中央配置できる。
+    // 横方向は clip_rect の幅を使い、パネル全幅で中央寄せする。
+    let canvas_rect = {
+        let avail = ui.available_rect_before_wrap();
+        let clip = ui.clip_rect();
+        egui::Rect::from_min_max(
+            egui::pos2(clip.min.x, avail.min.y),
+            egui::pos2(clip.max.x, clip.max.y),
+        )
+    };
 
     let texture_info = app.preview_texture.as_ref().map(|t| (t.id(), t.size_vec2()));
 
     match texture_info {
         Some((tex_id, img_size)) => {
-            let canvas_rect = canvas_rect;
             let offset_x = (canvas_rect.width()  - img_size.x).max(0.0) / 2.0;
             let offset_y = (canvas_rect.height() - img_size.y).max(0.0) / 2.0;
 

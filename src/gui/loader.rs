@@ -119,7 +119,12 @@ fn load_asset_folder_inner(state: &mut AppState, keep_texts: bool) -> anyhow::Re
         state.install_text  = read_utf8(&asset_dir.join("install.txt"));
         state.readme_text   = read_utf8(&asset_dir.join("readme.txt"));
 
-        // 文字コードチェック: UTF-8 以外であれば警告（それぞれ独立してチェック）
+        // 文字コードチェック
+        // - NonUtf8Bytes（バイト列が壊れている）: 書き換えで直せないため警告
+        // - NonUtf8Charset（UTF-8で読めるがcharset宣言が異なる）:
+        //     プロジェクトフォルダなら charset を UTF-8 に自動書き換えして通知、
+        //     それ以外（外部素材フォルダ）は触らず警告のみ
+        let is_project = state.is_project_dir();
         for fname in ["descript.txt", "install.txt"] {
             let path = asset_dir.join(fname);
             if !path.exists() { continue; }
@@ -132,13 +137,55 @@ fn load_asset_folder_inner(state: &mut AppState, keep_texts: bool) -> anyhow::Re
                     ));
                 }
                 EncodingStatus::NonUtf8Charset(cs) => {
-                    state.load_warnings.push(format!(
-                        "{fname} の charset が \"{cs}\" に設定されています。\n\
-                         このアプリは UTF-8 のみ対応しています。\n\
-                         文字化けが発生している場合はファイルを UTF-8 に変換してください。"
-                    ));
+                    if is_project {
+                        // プロジェクトフォルダ: charset を UTF-8 に自動書き換え
+                        if let Ok(true) = crate::core::project::ensure_charset_utf8(&path) {
+                            // 再読み込み
+                            if fname == "descript.txt" {
+                                state.descript_text = read_utf8(&path);
+                            } else {
+                                state.install_text = read_utf8(&path);
+                            }
+                            state.load_warnings.push(format!(
+                                "{fname} の charset が \"{cs}\" でしたが、UTF-8 に修正しました。"
+                            ));
+                        }
+                    } else {
+                        state.load_warnings.push(format!(
+                            "{fname} の charset が \"{cs}\" に設定されています。\n\
+                             このアプリは UTF-8 のみ対応しています。\n\
+                             文字化けが発生している場合はファイルを UTF-8 に変換してください。"
+                        ));
+                    }
                 }
                 EncodingStatus::Ok => {}
+            }
+        }
+
+        // プロジェクトフォルダのとき: 装飾エントリが未定義なら初期値を補完してファイルに書き込む
+        // ロード後に descript_text を再読み込みする
+        if is_project {
+            let descript_path = asset_dir.join("descript.txt");
+            if descript_path.exists() {
+                if let Ok(filled) = crate::core::project::ensure_decoration_entries(&descript_path) {
+                    state.descript_text = read_utf8(&descript_path);
+                    if !filled.is_empty() {
+                        // 補完したグループをblendmethodキー名から読みやすい名前に変換
+                        let group_names: Vec<&str> = filled.iter().map(|k| match k.as_str() {
+                            "cursor.blendmethod"           => "選択肢(選択中)",
+                            "cursor.notselect.blendmethod" => "選択肢(非選択)",
+                            "anchor.blendmethod"           => "アンカー(選択中)",
+                            "anchor.notselect.blendmethod" => "アンカー(非選択)",
+                            "anchor.visited.blendmethod"   => "アンカー(訪問済み)",
+                            other => other,
+                        }).collect();
+                        state.load_warnings.push(format!(
+                            "descript.txt に以下のグループの装飾設定が見つからなかったため、初期値を補完しました。\n\
+                             内容を確認し、必要に応じて設定を調整してください。\n\n{}",
+                            group_names.join("\n")
+                        ));
+                    }
+                }
             }
         }
 

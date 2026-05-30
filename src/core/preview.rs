@@ -915,42 +915,51 @@ fn draw_sample_text(
     let shadow_style = parsed.get("font.shadowstyle").map(|s| s.as_str()).unwrap_or("offset");
     let shadow = shadow_color.map(|sc| (sc, shadow_style.contains("outline")));
 
-    // blendmethod キーが存在しかつ "none" 以外のとき装飾あり
-    let blend_active = |key: &str| -> bool {
-        parsed.get(key)
-            .map(|s| s.trim().to_lowercase() != "none")
-            .unwrap_or(false)
+    // blendmethod の状態を3値で判定:
+    //   RasterOp  = none以外の値が存在 → ラスタオペレーションあり（pen/brush使用）
+    //   Simple    = none または未定義  → シンプルモード（font.color使用、矩形・下線は描画）
+    //   NoDeco    = Simple かつ font.color.r も未定義 → 装飾なし扱い（通常文字色にフォールバック）
+    let blend_state = |blend_key: &str, font_color_key: &str| -> u8 {
+        // 0=NoDeco, 1=Simple, 2=RasterOp
+        match parsed.get(blend_key).map(|s| s.trim().to_lowercase()).as_deref() {
+            Some(v) if v != "none" => 2, // RasterOp
+            _ => {
+                // none または未定義 → font.color.r の存在で判定
+                if parsed.contains_key(font_color_key) { 1 } else { 0 }
+            }
+        }
     };
-    let cursor_ns_deco  = blend_active("cursor.notselect.blendmethod");
-    let cursor_deco     = blend_active("cursor.blendmethod");
-    let anchor_ns_deco  = blend_active("anchor.notselect.blendmethod");
-    let anchor_deco     = blend_active("anchor.blendmethod");
-    let anchor_vis_deco = blend_active("anchor.visited.blendmethod");
+    let cursor_ns_state  = blend_state("cursor.notselect.blendmethod", "cursor.notselect.font.color.r");
+    let cursor_state     = blend_state("cursor.blendmethod",           "cursor.font.color.r");
+    let anchor_ns_state  = blend_state("anchor.notselect.blendmethod", "anchor.notselect.font.color.r");
+    let anchor_state     = blend_state("anchor.blendmethod",           "anchor.font.color.r");
+    let anchor_vis_state = blend_state("anchor.visited.blendmethod",   "anchor.visited.font.color.r");
 
     // 各色
-    let font_color        = get_color(parsed, "font.color").unwrap_or(Rgb(0,0,0));
-    let disable_color     = get_color(parsed, "disable.font.color").unwrap_or(Rgb(128,128,128));
-    // 装飾なし（blendmethod=none）のとき文字色は通常文字色を使う
-    // 色値 -1 指定は get_color が None を返す（0～255 外）ため fallback にフォールバックする
+    let font_color    = get_color(parsed, "font.color").unwrap_or(Rgb(0,0,0));
+    let disable_color = get_color(parsed, "disable.font.color").unwrap_or(Rgb(128,128,128));
+
+    // 文字色解決: NoDeco(0)は通常文字色、Simple(1)/RasterOp(2)はfont.color.*を使用
     let resolve_color = |key: &str, fallback: Rgb| -> Rgb {
         get_color(parsed, key).unwrap_or(fallback)
     };
-    let choice_color     = if !cursor_ns_deco { font_color } else { resolve_color("cursor.notselect.font.color", Rgb(0,0,255)) };
-    let choice_sel_color = if !cursor_deco    { font_color } else { resolve_color("cursor.font.color",           Rgb(255,255,255)) };
-    let anchor_color     = if !anchor_ns_deco { font_color } else { resolve_color("anchor.notselect.font.color", Rgb(0,0,255)) };
-    let anchor_sel_color = if !anchor_deco    { font_color } else { resolve_color("anchor.font.color",           Rgb(0,0,255)) };
-    let anchor_vis_color = if !anchor_vis_deco{ font_color } else { resolve_color("anchor.visited.font.color",   Rgb(170,0,170)) };
+    let choice_color     = if cursor_ns_state  == 0 { font_color } else { resolve_color("cursor.notselect.font.color", Rgb(0,0,255)) };
+    let choice_sel_color = if cursor_state     == 0 { font_color } else { resolve_color("cursor.font.color",           Rgb(255,255,255)) };
+    let anchor_color     = if anchor_ns_state  == 0 { font_color } else { resolve_color("anchor.notselect.font.color", Rgb(0,0,255)) };
+    let anchor_sel_color = if anchor_state     == 0 { font_color } else { resolve_color("anchor.font.color",           Rgb(0,0,255)) };
+    let anchor_vis_color = if anchor_vis_state == 0 { font_color } else { resolve_color("anchor.visited.font.color",   Rgb(170,0,170)) };
 
-    let cursor_brush      = get_color(parsed, "cursor.brush.color").unwrap_or(Rgb(0,0,255));
-    let cursor_pen        = get_color(parsed, "cursor.pen.color").unwrap_or(Rgb(0,0,0));
-    let anchor_brush      = get_color(parsed, "anchor.brush.color").unwrap_or(Rgb(0,0,0));
-    let anchor_pen        = get_color(parsed, "anchor.pen.color").unwrap_or(Rgb(0,0,255));
-    let anchor_vis_brush  = get_color(parsed, "anchor.visited.brush.color").unwrap_or(Rgb(0,0,0));
-    let anchor_vis_pen    = get_color(parsed, "anchor.visited.pen.color").unwrap_or(Rgb(0,0,0));
-    let cursor_ns_brush   = get_color(parsed, "cursor.notselect.brush.color").unwrap_or(Rgb(0,0,0));
-    let cursor_ns_pen     = get_color(parsed, "cursor.notselect.pen.color").unwrap_or(Rgb(0,0,0));
-    let anchor_ns_brush   = get_color(parsed, "anchor.notselect.brush.color").unwrap_or(Rgb(0,0,0));
-    let anchor_ns_pen     = get_color(parsed, "anchor.notselect.pen.color").unwrap_or(Rgb(0,0,0));
+    // pen/brush色: RasterOp(2)のときのみ使用。Simple(1)のときはfont.colorを使用（仮表示）
+    let cursor_brush     = if cursor_state     == 1 { choice_sel_color } else { get_color(parsed, "cursor.brush.color").unwrap_or(Rgb(0,0,255)) };
+    let cursor_pen       = if cursor_state     == 1 { choice_sel_color } else { get_color(parsed, "cursor.pen.color").unwrap_or(Rgb(0,0,0)) };
+    let anchor_brush     = if anchor_state     == 1 { anchor_sel_color } else { get_color(parsed, "anchor.brush.color").unwrap_or(Rgb(0,0,0)) };
+    let anchor_pen       = if anchor_state     == 1 { anchor_sel_color } else { get_color(parsed, "anchor.pen.color").unwrap_or(Rgb(0,0,255)) };
+    let anchor_vis_brush = if anchor_vis_state == 1 { anchor_vis_color } else { get_color(parsed, "anchor.visited.brush.color").unwrap_or(Rgb(0,0,0)) };
+    let anchor_vis_pen   = if anchor_vis_state == 1 { anchor_vis_color } else { get_color(parsed, "anchor.visited.pen.color").unwrap_or(Rgb(0,0,0)) };
+    let cursor_ns_brush  = if cursor_ns_state  == 1 { choice_color     } else { get_color(parsed, "cursor.notselect.brush.color").unwrap_or(Rgb(0,0,0)) };
+    let cursor_ns_pen    = if cursor_ns_state  == 1 { choice_color     } else { get_color(parsed, "cursor.notselect.pen.color").unwrap_or(Rgb(0,0,0)) };
+    let anchor_ns_brush  = if anchor_ns_state  == 1 { anchor_color     } else { get_color(parsed, "anchor.notselect.brush.color").unwrap_or(Rgb(0,0,0)) };
+    let anchor_ns_pen    = if anchor_ns_state  == 1 { anchor_color     } else { get_color(parsed, "anchor.notselect.pen.color").unwrap_or(Rgb(0,0,0)) };
 
     // style キーのデフォルト値（field_def と一致させる）
     let style_defaults: std::collections::HashMap<&str, &str> = [
@@ -966,11 +975,25 @@ fn draw_sample_text(
         let v = parsed.get(key).map(|s| s.as_str()).unwrap_or(default).to_lowercase();
         (v.contains("square"), v.contains("underline"))
     };
-    let (cursor_ns_rect,  cursor_ns_ul)  = if !cursor_ns_deco  { (false, false) } else { parse_style("cursor.notselect.style") };
-    let (cursor_rect,     cursor_ul)     = if !cursor_deco     { (false, false) } else { parse_style("cursor.style") };
-    let (anchor_ns_rect,  anchor_ns_ul)  = if !anchor_ns_deco  { (false, false) } else { parse_style("anchor.notselect.style") };
-    let (anchor_rect,     anchor_ul)     = if !anchor_deco     { (false, false) } else { parse_style("anchor.style") };
-    let (anchor_vis_rect, anchor_vis_ul) = if !anchor_vis_deco { (false, false) } else { parse_style("anchor.visited.style") };
+    // NoDeco(0)のみ矩形・下線なし。Simple(1)/RasterOp(2)はstyleに従い描画
+    let (cursor_ns_rect,  cursor_ns_ul)  = if cursor_ns_state  == 0 { (false, false) } else { parse_style("cursor.notselect.style") };
+    let (cursor_rect,     cursor_ul)     = if cursor_state     == 0 { (false, false) } else { parse_style("cursor.style") };
+    let (anchor_ns_rect,  anchor_ns_ul)  = if anchor_ns_state  == 0 { (false, false) } else { parse_style("anchor.notselect.style") };
+    let (anchor_rect,     anchor_ul)     = if anchor_state     == 0 { (false, false) } else { parse_style("anchor.style") };
+    let (anchor_vis_rect, anchor_vis_ul) = if anchor_vis_state == 0 { (false, false) } else { parse_style("anchor.visited.style") };
+
+    // シンプルモード(state==1)時の影設定: {prefix}.font.shadowcolor/shadowstyle を参照
+    // 未定義または none のときは通常文字の影設定にフォールバック
+    let resolve_shadow = |sc_key: &str, ss_key: &str| -> Option<(Rgb, bool)> {
+        let sc = get_color(parsed, sc_key)?; // none または未定義なら None
+        let style = parsed.get(ss_key).map(|s| s.as_str()).unwrap_or("offset");
+        Some((sc, style.contains("outline")))
+    };
+    let cursor_shadow     = if cursor_state     == 1 { resolve_shadow("cursor.font.shadowcolor",           "cursor.font.shadowstyle")           .or(shadow) } else { shadow };
+    let cursor_ns_shadow  = if cursor_ns_state  == 1 { resolve_shadow("cursor.notselect.font.shadowcolor", "cursor.notselect.font.shadowstyle")  .or(shadow) } else { shadow };
+    let anchor_shadow     = if anchor_state     == 1 { resolve_shadow("anchor.font.shadowcolor",           "anchor.font.shadowstyle")           .or(shadow) } else { shadow };
+    let anchor_ns_shadow  = if anchor_ns_state  == 1 { resolve_shadow("anchor.notselect.font.shadowcolor", "anchor.notselect.font.shadowstyle")  .or(shadow) } else { shadow };
+    let anchor_vis_shadow = if anchor_vis_state == 1 { resolve_shadow("anchor.visited.font.shadowcolor",   "anchor.visited.font.shadowstyle")   .or(shadow) } else { shadow };
 
     // GDI フォントの internal leading（字形上端より上の余白）
     // square/underline の描画位置をグリフの実描画範囲に合わせるために使う
@@ -1101,7 +1124,16 @@ fn draw_sample_text(
         // テキスト描画: leading を上下均等に振り分けて font_height 内で垂直中央に配置
         let text_draw_y = text_y - leading / 2;
         let clip = Some(wrap_x);
-        draw_text_on(img, font_name, font, label, tx, text_draw_y, font_height, txt_color, shadow, clip, no_aa, sess);
+        // シンプルモード時はグループごとの影設定を使用
+        let line_shadow = match role {
+            2 => cursor_ns_shadow,
+            3 => cursor_shadow,
+            4 => anchor_ns_shadow,
+            5 => anchor_shadow,
+            6 => anchor_vis_shadow,
+            _ => shadow,
+        };
+        draw_text_on(img, font_name, font, label, tx, text_draw_y, font_height, txt_color, line_shadow, clip, no_aa, sess);
 
         text_y += line_h;
         line_idx += 1;

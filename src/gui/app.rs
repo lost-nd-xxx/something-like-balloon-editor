@@ -436,9 +436,9 @@ impl BalloonEditorApp {
     /// load_warnings が溜まっていればダイアログに表示してクリアする
     fn flush_load_warnings(&mut self) {
         if self.state.load_warnings.is_empty() { return; }
-        let msg = self.state.load_warnings.join("\n\n");
+        let msg = self.state.load_warnings.join("\n\n――――――――――\n\n");
         self.state.load_warnings.clear();
-        self.dialog = Some(("文字コード警告".into(), msg));
+        self.dialog = Some(("読み込み時の通知".into(), msg));
     }
 
     /// バルーンキャッシュを全件再構築してプレビューを更新する（F5・初期値に戻す等で使用）
@@ -563,7 +563,7 @@ impl BalloonEditorApp {
         self.save_project();
 
         match crate::core::project::create_project_from_folder(&asset_dir, new_name) {
-            Ok(dir) => {
+            Ok((dir, _filled)) => {
                 self.state.selected_asset_dir = Some(dir);
                 self.reload_asset_folder(ctx);
             }
@@ -1225,19 +1225,47 @@ impl eframe::App for BalloonEditorApp {
                         let can_create = !name_trimmed.is_empty();
                         if ui.add_enabled(can_create, egui::Button::new("作成")).clicked() {
                             match crate::core::project::create_project_from_folder(&src, &name_trimmed) {
-                                Ok(dir) => {
+                                Ok((dir, filled)) => {
                                     // blendmethod 警告チェック
                                     let bm_warns = crate::core::project::check_blendmethod_warnings(&dir);
                                     self.state.selected_asset_dir = Some(dir);
                                     self.reload_asset_folder(ctx);
+                                    // 補完通知と blendmethod 警告を1つのダイアログに集約する
+                                    // （reload_asset_folder 後に組み立てて dialog を上書き）
+                                    let mut sections: Vec<String> = Vec::new();
+                                    // reload_asset_folder 内の flush_load_warnings が設定した
+                                    // 文字コード警告ダイアログがあれば先頭に取り込んで潰さないようにする
+                                    if let Some((_, prev_msg)) = self.dialog.take() {
+                                        sections.push(prev_msg);
+                                    }
+                                    if !filled.is_empty() {
+                                        let group_names: Vec<&str> = filled.iter().map(|k| match k.as_str() {
+                                            "cursor.blendmethod"           => "選択肢(選択中)",
+                                            "cursor.notselect.blendmethod" => "選択肢(非選択)",
+                                            "anchor.blendmethod"           => "アンカー(選択中)",
+                                            "anchor.notselect.blendmethod" => "アンカー(非選択)",
+                                            "anchor.visited.blendmethod"   => "アンカー(訪問済み)",
+                                            other => other,
+                                        }).collect();
+                                        sections.push(format!(
+                                            "descript.txt に以下のグループの装飾設定が見つからなかったため、初期値を補完しました。\n\
+                                             内容を確認し、必要に応じて設定を調整してください。\n\n{}",
+                                            group_names.join("\n")
+                                        ));
+                                    }
                                     if !bm_warns.is_empty() {
+                                        sections.push(format!(
+                                            "以下の blendmethod 設定はこのアプリでは再現できません。\n\
+                                             SSPでの表示と異なる場合があります。\n\n{}",
+                                            bm_warns.iter().map(|w| {
+                                                w.trim_end_matches(" (このアプリでは描画を再現できません)").to_string()
+                                            }).collect::<Vec<_>>().join("\n")
+                                        ));
+                                    }
+                                    if !sections.is_empty() {
                                         self.dialog = Some((
-                                            "blendmethod 警告".into(),
-                                            format!(
-                                                "以下の blendmethod 設定はこのアプリでは再現できません。\n\
-                                                 SSPでの表示と異なる場合があります。\n\n{}",
-                                                bm_warns.join("\n")
-                                            ),
+                                            "プロジェクト作成 通知".into(),
+                                            sections.join("\n\n――――――――――\n\n"),
                                         ));
                                     }
                                     close = true;
@@ -1634,19 +1662,6 @@ impl eframe::App for BalloonEditorApp {
                     self.state.import_queue_index = 0;
                 }
             }
-        }
-
-        // ダイアログ
-        if let Some((title, msg)) = self.dialog.clone() {
-            egui::Window::new(title)
-                .collapsible(false)
-                .resizable(false)
-                .show(ctx, |ui| {
-                    ui.label(&msg);
-                    if ui.button("OK").clicked() {
-                        self.dialog = None;
-                    }
-                });
         }
 
         // ウィンドウサイズを毎フレーム記録

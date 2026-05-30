@@ -1,7 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use encoding_rs::Encoding;
-use crate::gui::field_def::DECORATION_GROUPS;
 use crate::core::descript::{parse_descript, set_descript_value};
 
 /// プロジェクトが配置されるベースディレクトリ（実行ファイルと同じディレクトリの `projects` フォルダ）を返します。
@@ -84,7 +83,8 @@ const IMPORT_EXTENSIONS: &[&str] = &["png", "pna", "pnr", "txt"];
 /// 既存フォルダの内容を新規プロジェクトとしてコピーして作成します。
 /// `src_dir` 内の *.png / *.pna / *.pnr / *.txt を `projects/<name>/` にコピーします。
 /// 既に同名プロジェクトが存在する場合は `_backup` に退避し、失敗時はロールバックします。
-pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<PathBuf> {
+/// 戻り値: (プロジェクトディレクトリ, 補完したblendmethodキーリスト)
+pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<(PathBuf, Vec<String>)> {
     let project_dir = get_project_dir(name)?;
     let backup_dir = project_dir.with_file_name(format!("{}_backup", name));
 
@@ -99,6 +99,7 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
     }
 
     // 2. プロジェクトフォルダを作成してファイルをコピー
+    let mut decoration_filled: Vec<String> = Vec::new();
     let result = (|| -> anyhow::Result<()> {
         fs::create_dir_all(&project_dir)?;
 
@@ -174,7 +175,7 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
                 }
                 // descript.txt に cursor/anchor 装飾エントリがなければ補完
                 if file_name_lower == "descript.txt" {
-                    ensure_decoration_entries(&dest)?;
+                    decoration_filled = ensure_decoration_entries(&dest)?;
                 }
             } else {
                 fs::copy(&path, &dest)?;
@@ -191,7 +192,7 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
                     eprintln!("警告: 一時バックアップの削除に失敗しました: {}", e);
                 }
             }
-            Ok(project_dir)
+            Ok((project_dir, decoration_filled))
         }
         Err(e) => {
             // 失敗: ロールバック
@@ -276,48 +277,186 @@ fn convert_txt_to_utf8(src: &Path, dest: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// ファイルに `charset,` エントリがなければ先頭行に `charset,UTF-8` を追加する。
-fn ensure_charset_utf8(path: &Path) -> anyhow::Result<()> {
-    let text = fs::read_to_string(path)?;
-    // 既に charset, エントリがあれば何もしない
-    let has_charset = text.lines().any(|line| {
-        let t = line.trim();
-        !t.starts_with("//") && t.to_lowercase().starts_with("charset,")
-    });
-    if has_charset {
-        return Ok(());
-    }
-    // 先頭に charset,UTF-8 を追加
-    let new_text = format!("charset,UTF-8\n{}", text);
-    fs::write(path, new_text)?;
-    Ok(())
-}
-
-/// descript.txt に cursor/anchor 装飾エントリがない場合に補完する。
+/// ファイルの charset を UTF-8 に統一する。
+/// - charset 行が無い → 先頭に `charset,UTF-8` を追加
+/// - charset 行があり UTF-8 以外 → `charset,UTF-8` に書き換え
+/// - charset 行があり UTF-8 → 何もしない
 ///
-/// グループごとに独立して判定する：
-/// - blendmethod キーが存在しない → そのグループを「装飾なし」値で書き込む
-/// - blendmethod キーが存在する → そのグループは何もしない（ユーザー定義を尊重）
-fn ensure_decoration_entries(path: &Path) -> anyhow::Result<()> {
+/// 書き換え/追加が発生した場合は Ok(true) を返す。
+pub fn ensure_charset_utf8(path: &Path) -> anyhow::Result<bool> {
     let text = fs::read_to_string(path)?;
-    let parsed = parse_descript(&text);
 
-    let mut new_text = text.clone();
+    // 既存の charset 行を探す（コメント行は除く）
+    let existing = text.lines().find_map(|line| {
+        let t = line.trim();
+        if t.starts_with("//") { return None; }
+        let lower = t.to_lowercase();
+        if lower.starts_with("charset,") {
+            Some(t["charset,".len()..].trim().to_string())
+        } else {
+            None
+        }
+    });
 
-    for (_, blend_key, keys) in DECORATION_GROUPS {
-        if !parsed.contains_key(*blend_key) {
-            // blendmethod が無い → 装飾なし値で補完
-            new_text = set_descript_value(&new_text, blend_key, "none");
-            for (key, _on_default, off_val) in *keys {
-                new_text = set_descript_value(&new_text, key, off_val);
+    match existing {
+        None => {
+            // charset 行なし → 先頭に追加
+            let new_text = format!("charset,UTF-8\n{}", text);
+            fs::write(path, new_text)?;
+            Ok(true)
+        }
+        Some(cs) => {
+            let lower = cs.to_lowercase();
+            if lower == "utf-8" || lower == "utf8" {
+                Ok(false) // 既に UTF-8 → 何もしない
+            } else {
+                // UTF-8 以外 → 既存の charset 行を charset,UTF-8 に書き換え
+                let new_text = set_descript_value(&text, "charset", "UTF-8");
+                fs::write(path, new_text)?;
+                Ok(true)
             }
         }
     }
+}
 
+/// descript.txt に cursor/anchor 装飾エントリがない場合に初期値を補完する。
+///
+/// グループごとに独立して判定する：
+/// - blendmethod が存在する → スキップ（ユーザー定義を尊重）
+/// - blendmethod が存在しない かつ グループ内のキー（blendmethod除く）が1つでも存在する → スキップ
+/// - blendmethod もグループ内キーも存在しない → 初期値を書き込む
+///
+/// フォルダからプロジェクト作成時・プロジェクトロード時の両方で使用する。
+/// 補完したグループのblendmethodキー名リストを返す（何も補完しなければ空）。
+pub fn ensure_decoration_entries(path: &Path) -> anyhow::Result<Vec<String>> {
+    let text = fs::read_to_string(path)?;
+    let (new_text, filled) = ensure_decoration_entries_text_with_log(&text);
     if new_text != text {
-        fs::write(path, new_text)?;
+        fs::write(path, &new_text)?;
     }
-    Ok(())
+    Ok(filled)
+}
+
+/// テキストに対して装飾エントリの補完を行い、(結果テキスト, 補完したblendmethodキーリスト) を返す。
+fn ensure_decoration_entries_text_with_log(text: &str) -> (String, Vec<String>) {
+    let parsed = parse_descript(text);
+    let mut new_text = text.to_string();
+    let mut filled: Vec<String> = Vec::new();
+
+    // グループ定義: (blendmethodキー, &[(補完キー, 初期値)])
+    // 初期値は参照型（"ref:font.color.r" 等）または固定値
+    // "ref:KEY" → parsed から KEY を解決して数値として使う
+    let groups: &[(&str, &[(&str, &str)])] = &[
+        ("cursor.blendmethod", &[
+            ("cursor.style",                "square"),
+            ("cursor.font.color.r",         "128"),
+            ("cursor.font.color.g",         "128"),
+            ("cursor.font.color.b",         "255"),
+            ("cursor.font.shadowcolor.r",   "ref:font.shadowcolor.r"),
+            ("cursor.font.shadowcolor.g",   "ref:font.shadowcolor.g"),
+            ("cursor.font.shadowcolor.b",   "ref:font.shadowcolor.b"),
+            ("cursor.font.shadowstyle",     "ref:font.shadowstyle"),
+            ("cursor.pen.color.r",          "127"),
+            ("cursor.pen.color.g",          "127"),
+            ("cursor.pen.color.b",          "0"),
+            ("cursor.brush.color.r",        "255"),
+            ("cursor.brush.color.g",        "255"),
+            ("cursor.brush.color.b",        "255"),
+        ]),
+        ("cursor.notselect.blendmethod", &[
+            ("cursor.notselect.style",                "none"),
+            ("cursor.notselect.font.color.r",         "ref:font.color.r"),
+            ("cursor.notselect.font.color.g",         "ref:font.color.g"),
+            ("cursor.notselect.font.color.b",         "ref:font.color.b"),
+            ("cursor.notselect.font.shadowcolor.r",   "ref:font.shadowcolor.r"),
+            ("cursor.notselect.font.shadowcolor.g",   "ref:font.shadowcolor.g"),
+            ("cursor.notselect.font.shadowcolor.b",   "ref:font.shadowcolor.b"),
+            ("cursor.notselect.font.shadowstyle",     "ref:font.shadowstyle"),
+            ("cursor.notselect.pen.color.r",          "0"),
+            ("cursor.notselect.pen.color.g",          "0"),
+            ("cursor.notselect.pen.color.b",          "0"),
+            ("cursor.notselect.brush.color.r",        "0"),
+            ("cursor.notselect.brush.color.g",        "0"),
+            ("cursor.notselect.brush.color.b",        "0"),
+        ]),
+        ("anchor.blendmethod", &[
+            ("anchor.style",                "underline"),
+            ("anchor.font.color.r",         "ref:font.color.r"),
+            ("anchor.font.color.g",         "ref:font.color.g"),
+            ("anchor.font.color.b",         "ref:font.color.b"),
+
+            ("anchor.font.shadowcolor.r",   "ref:font.shadowcolor.r"),
+            ("anchor.font.shadowcolor.g",   "ref:font.shadowcolor.g"),
+            ("anchor.font.shadowcolor.b",   "ref:font.shadowcolor.b"),
+            ("anchor.font.shadowstyle",     "ref:font.shadowstyle"),
+            ("anchor.pen.color.r",          "127"),
+            ("anchor.pen.color.g",          "127"),
+            ("anchor.pen.color.b",          "0"),
+            ("anchor.brush.color.r",        "0"),
+            ("anchor.brush.color.g",        "0"),
+            ("anchor.brush.color.b",        "0"),
+        ]),
+        ("anchor.notselect.blendmethod", &[
+            ("anchor.notselect.style",                "none"),
+            ("anchor.notselect.font.color.r",         "ref:font.color.r"),
+            ("anchor.notselect.font.color.g",         "ref:font.color.g"),
+            ("anchor.notselect.font.color.b",         "ref:font.color.b"),
+            ("anchor.notselect.font.shadowcolor.r",   "ref:font.shadowcolor.r"),
+            ("anchor.notselect.font.shadowcolor.g",   "ref:font.shadowcolor.g"),
+            ("anchor.notselect.font.shadowcolor.b",   "ref:font.shadowcolor.b"),
+            ("anchor.notselect.font.shadowstyle",     "ref:font.shadowstyle"),
+            ("anchor.notselect.pen.color.r",          "0"),
+            ("anchor.notselect.pen.color.g",          "0"),
+            ("anchor.notselect.pen.color.b",          "0"),
+            ("anchor.notselect.brush.color.r",        "0"),
+            ("anchor.notselect.brush.color.g",        "0"),
+            ("anchor.notselect.brush.color.b",        "0"),
+        ]),
+        ("anchor.visited.blendmethod", &[
+            ("anchor.visited.style",                "none"),
+            ("anchor.visited.font.color.r",         "85"),
+            ("anchor.visited.font.color.g",         "85"),
+            ("anchor.visited.font.color.b",         "85"),
+            ("anchor.visited.font.shadowcolor.r",   "ref:font.shadowcolor.r"),
+            ("anchor.visited.font.shadowcolor.g",   "ref:font.shadowcolor.g"),
+            ("anchor.visited.font.shadowcolor.b",   "ref:font.shadowcolor.b"),
+            ("anchor.visited.font.shadowstyle",     "ref:font.shadowstyle"),
+            ("anchor.visited.pen.color.r",          "0"),
+            ("anchor.visited.pen.color.g",          "0"),
+            ("anchor.visited.pen.color.b",          "0"),
+            ("anchor.visited.brush.color.r",        "0"),
+            ("anchor.visited.brush.color.g",        "0"),
+            ("anchor.visited.brush.color.b",        "0"),
+        ]),
+    ];
+
+    for (blend_key, keys) in groups {
+        // blendmethod が存在する → スキップ
+        if parsed.contains_key(*blend_key) {
+            continue;
+        }
+        // グループ内キーが1つでも存在する → スキップ
+        let any_key_exists = keys.iter().any(|(k, _)| parsed.contains_key(*k));
+        if any_key_exists {
+            continue;
+        }
+        // blendmethod もグループ内キーも存在しない → 初期値で補完
+        new_text = set_descript_value(&new_text, blend_key, "copypen");
+        for (key, raw_val) in *keys {
+            let val = if let Some(ref_key) = raw_val.strip_prefix("ref:") {
+                // 参照型: parsed から値を解決、なければ空文字（= エントリ書き込みなし）
+                parsed.get(ref_key).cloned().unwrap_or_default()
+            } else {
+                raw_val.to_string()
+            };
+            if !val.is_empty() {
+                new_text = set_descript_value(&new_text, key, &val);
+            }
+        }
+        filled.push(blend_key.to_string());
+    }
+
+    (new_text, filled)
 }
 
 /// バイト列の先頭部分から `charset,xxx` 行を探して返す（見つからなければ None）

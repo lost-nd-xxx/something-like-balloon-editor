@@ -149,9 +149,9 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                 let deco_group = DECORATION_GROUPS.iter()
                     .find(|(name, _, _)| *name == group.name);
 
-                // 装飾なし判定: blendmethod キーが "none" のとき装飾なし
+                // シンプルモード判定: blendmethod が "none" または未定義のとき
                 // 個別設定に blendmethod キーが存在しない場合は共通 descript_text を参照する
-                let decoration_off = if let Some((_, blend_key, _)) = deco_group {
+                let (simple_mode, blend_val) = if let Some((_, blend_key, _)) = deco_group {
                     let indiv_text = if use_individual {
                         app.state.individual_texts.get(&cfg_key).cloned().unwrap_or_default()
                     } else {
@@ -163,14 +163,39 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                     } else {
                         app.state.descript_text.clone()
                     };
-                    is_decoration_off(&descript_text, blend_key)
+                    let bv = parse_descript(&descript_text)
+                        .get(*blend_key).cloned()
+                        .unwrap_or_default();
+                    let is_simple = bv.trim().to_lowercase() == "none" || bv.is_empty();
+                    (is_simple, bv)
                 } else {
-                    false
+                    (false, String::new())
                 };
+                // copypen/none 以外のblendmethodはTODO: グレーアウト対応
+                let blend_is_unsupported = !blend_val.is_empty()
+                    && blend_val.trim().to_lowercase() != "none"
+                    && blend_val.trim().to_lowercase() != "copypen";
+
+                // シンプルモードではフィールドをグレーアウトしない
+                let decoration_off = false;
 
                 if let Some((_, blend_key, keys)) = deco_group {
-                    let mut checked = decoration_off;
-                    if ui.checkbox(&mut checked, "装飾なし").changed() {
+                    // ラスタオペレーション = copypen のときON、none/未定義のときOFF
+                    let mut checked = !simple_mode;
+                    ui.add_enabled_ui(!blend_is_unsupported, |ui| {
+                    let hover_text = if blend_is_unsupported {
+                        format!(
+                            "現在の値 \"{}\" はこのアプリでは変更できません",
+                            blend_val.trim()
+                        )
+                    } else {
+                        "ON:  blendmethod,copypen\nOFF: blendmethod,none".to_string()
+                    };
+                    // 無効化時は on_disabled_hover_text、有効時は on_hover_text を使う
+                    let cb = ui.checkbox(&mut checked, "ラスタオペレーション")
+                        .on_hover_text(hover_text.clone())
+                        .on_disabled_hover_text(hover_text);
+                    if cb.changed() {
                         app.state.push_undo();
                         let mut descript_text = if use_individual {
                             app.state.individual_texts.get(&cfg_key).cloned().unwrap_or_default()
@@ -178,8 +203,8 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                             app.state.descript_text.clone()
                         };
                         let backup_key = format!("{}::{}", cfg_key, blend_key);
-                        if checked {
-                            // ON 直前の各キー値をスナップショットして保持（OFF 復帰時に使う）
+                        if !checked {
+                            // OFF(→none): 直前の各キー値をスナップショット
                             let parsed = parse_descript(&descript_text);
                             let mut snap = std::collections::HashMap::new();
                             snap.insert(
@@ -193,13 +218,10 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                             }
                             app.state.decoration_backup.insert(backup_key, snap);
 
-                            // blendmethod を none に、style/色を装飾なし値に設定
+                            // blendmethod を none に設定（pen/brush色はそのまま保持）
                             descript_text = set_descript_value(&descript_text, blend_key, "none");
-                            for (key, _on_default, off_val) in *keys {
-                                descript_text = set_descript_value(&descript_text, key, off_val);
-                            }
                         } else {
-                            // OFF 復帰: 保持していた値があれば復元、なければ初期値
+                            // ON(→copypen): 保持していた値があれば復元、なければ初期値
                             let backup = app.state.decoration_backup.remove(&backup_key);
                             let restore = |dt: String, key: &str, fallback: &str| -> String {
                                 let v = backup.as_ref()
@@ -215,45 +237,7 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                         }
                         write_back(app, ctx, &cfg_key, use_individual, descript_text);
                     }
-                }
-
-                // 装飾なしON中は、グレーアウト表示に「装飾なしにする直前の値」を出す。
-                // 実値は -1/none だが、保持してある backup をマージした一時テキストへ
-                // 描画中だけ差し替える（グレーアウト中で編集不可のため書き戻しは起きない）。
-                let restore_text = if decoration_off {
-                    if let Some((_, blend_key, keys)) = deco_group {
-                        let backup_key = format!("{}::{}", cfg_key, blend_key);
-                        // backup があればその値、無ければ on_default（静的初期値）でマージする。
-                        // → 読み込み時から装飾なしのグループでも想定値が表示される。
-                        let snap = app.state.decoration_backup.get(&backup_key).cloned();
-                        let target = if use_individual {
-                            app.state.individual_texts.get(&cfg_key).cloned().unwrap_or_default()
-                        } else {
-                            app.state.descript_text.clone()
-                        };
-                        let mut merged = target.clone();
-                        let bm = snap.as_ref().and_then(|m| m.get(*blend_key).cloned())
-                            .unwrap_or_else(|| "copypen".to_string());
-                        merged = set_descript_value(&merged, blend_key, &bm);
-                        for (key, on_default, _off) in *keys {
-                            let v = snap.as_ref().and_then(|m| m.get(*key).cloned())
-                                .unwrap_or_else(|| (*on_default).to_string());
-                            merged = set_descript_value(&merged, key, &v);
-                        }
-                        Some((target, merged))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                // 一時差し替え（描画後に元へ戻す）
-                if let Some((_, merged)) = &restore_text {
-                    if use_individual {
-                        app.state.individual_texts.insert(cfg_key.clone(), merged.clone());
-                    } else {
-                        app.state.descript_text = merged.clone();
-                    }
+                    }); // add_enabled_ui
                 }
 
                 egui::Grid::new(group.name)
@@ -261,13 +245,29 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                     .spacing([8.0, 4.0])
                     .show(ui, |ui| {
                         for field in group.fields {
-                            // 影スタイルは対応する影色が none のときグレーアウト
+                            // シンプルモード(blendmethod=none)に応じてフィールドを切り替え表示
+                            // シンプルモードON  → pen.color/brush.color を非表示、shadowcolor/shadowstyle を表示
+                            // シンプルモードOFF → shadowcolor/shadowstyle を非表示
+                            if deco_group.is_some() {
+                                let is_pen   = field.key.contains(".pen.color");
+                                let is_brush = field.key.contains(".brush.color");
+                                let is_shadow_color = field.key.contains(".font.shadowcolor");
+                                let is_shadow_style = field.key.contains(".font.shadowstyle");
+                                if simple_mode {
+                                    if is_pen || is_brush { continue; }
+                                } else {
+                                    if is_shadow_color || is_shadow_style { continue; }
+                                }
+                            }
+
+                            // 影スタイルは対応する影色が none または未設定のときグレーアウト
                             let enabled = if field.key.ends_with(".shadowstyle") {
                                 let shadow_color_key = field.key.trim_end_matches("style").to_string() + "color.r";
                                 let v = resolve_field_value(app, &shadow_color_key, &cfg_key, use_individual);
-                                v.to_lowercase() != "none"
+                                // 未設定（空文字）はデフォルト none 扱い
+                                !v.is_empty() && v.to_lowercase() != "none"
                             } else if deco_group.is_some() {
-                                // 装飾なしのグループは全フィールドをグレーアウト
+                                // シンプルモード中は全フィールドをグレーアウト
                                 !decoration_off
                             } else {
                                 true
@@ -280,14 +280,6 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                         }
                     });
 
-                // 一時差し替えを元に戻す
-                if let Some((orig, _)) = restore_text {
-                    if use_individual {
-                        app.state.individual_texts.insert(cfg_key.clone(), orig);
-                    } else {
-                        app.state.descript_text = orig;
-                    }
-                }
             });
     }
 }
@@ -750,14 +742,6 @@ fn show_drag_entry_list(
         });
 }
 
-/// blendmethod キーの値が "none" なら装飾なし
-fn is_decoration_off(text: &str, blend_key: &str) -> bool {
-    use regex::Regex;
-    let pat = Regex::new(&format!(r"(?m)^{},(.+)$", regex::escape(blend_key))).unwrap();
-    pat.captures(text)
-        .map(|c| c[1].trim().to_lowercase() == "none")
-        .unwrap_or(false)
-}
 
 /// 選択中バルーンが個別設定を持てるかどうかを判定する。
 /// balloonc* / balloonk* / balloons* / balloonp*def* を対象（奇数反転生成も含む）。
