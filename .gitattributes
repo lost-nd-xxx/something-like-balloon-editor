@@ -1,0 +1,22 @@
+# 改行コード方針（このリポジトリで固定。個人のグローバル設定に依存しない）
+#
+# 既定: テキストかどうかを Git に自動判定させ、リポジトリ内では LF に正規化する。
+* text=auto
+
+# 伺か素材として扱う txt は CRLF で展開する（SSP 互換のため）。
+# descript.txt / install.txt / readme.txt / profile/slbe/files.txt などが該当。
+*.txt text eol=crlf
+
+# Windows 用スクリプトは CRLF。
+*.ps1 text eol=crlf
+
+# ソース・開発用ドキュメントは LF（Rust / GitHub の慣習に合わせる）。
+*.rs  text eol=lf
+*.md  text eol=lf
+
+# バイナリは改行変換しない（誤変換による破損を明示的に防ぐ）。
+*.png binary
+*.pna binary
+*.pnr binary
+*.ico binary
+*.ttf binary
