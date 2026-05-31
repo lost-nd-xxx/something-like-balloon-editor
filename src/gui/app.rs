@@ -1334,6 +1334,8 @@ impl eframe::App for BalloonEditorApp {
                                 match crate::core::project::create_project_safe(&name_trimmed) {
                                     Ok(dir) => {
                                         self.state.selected_asset_dir = Some(dir);
+                                        // 新規作成直後の装飾補完通知を抑制する（空 descript.txt からの補完は当然のため）
+                                        self.state.suppress_decoration_fill_notice = true;
                                         self.reload_asset_folder(ctx);
                                         close = true;
                                     }

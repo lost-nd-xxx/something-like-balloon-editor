@@ -169,7 +169,10 @@ fn load_asset_folder_inner(state: &mut AppState, keep_texts: bool) -> anyhow::Re
             if descript_path.exists() {
                 if let Ok(filled) = crate::core::project::ensure_decoration_entries(&descript_path) {
                     state.descript_text = read_utf8(&descript_path);
-                    if !filled.is_empty() {
+                    // 新規プロジェクト作成直後は空の descript.txt から全グループを補完するため、
+                    // 補完通知は不要。フラグが立っていれば通知を抑制し、ここでリセットする（1回限り）。
+                    let suppress = std::mem::take(&mut state.suppress_decoration_fill_notice);
+                    if !filled.is_empty() && !suppress {
                         // 補完したグループをblendmethodキー名から読みやすい名前に変換
                         let group_names: Vec<&str> = filled.iter().map(|k| match k.as_str() {
                             "cursor.blendmethod"           => "選択肢(選択中)",
