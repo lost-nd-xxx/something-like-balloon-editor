@@ -195,11 +195,6 @@ pub struct AppState {
     pub show_new_project_window: bool,
     pub new_project_name: String,
     pub new_project_warning: String,
-    /// 新規プロジェクト作成直後のロードで装飾補完通知を抑制するフラグ。
-    /// 空の descript.txt から全グループを補完するのは当然のため通知不要。
-    /// ロード後に loader 側でリセットされる（1回限り有効）。
-    pub suppress_decoration_fill_notice: bool,
-
     /// 未保存の編集があるか（dirtyフラグ）。保存/読み込み/新規で false に戻す。
     pub dirty: bool,
     /// 未保存確認ダイアログ後に実行する保留アクション
@@ -344,8 +339,6 @@ impl AppState {
             show_new_project_window: false,
             new_project_name: String::new(),
             new_project_warning: String::new(),
-            suppress_decoration_fill_notice: false,
-
             dirty: false,
             pending_unsaved_action: None,
             allow_close: false,
