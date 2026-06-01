@@ -73,7 +73,18 @@ resource/            フォント・アイコン・サンプル素材
 
 ### リリース手順（read-tree 方式）
 
-dev で版上げコミット（`Cargo.toml` の `version` 更新）を済ませた後：
+dev で版上げを行う：
+
+```sh
+# 1. Cargo.toml の version を編集する
+# 2. build_release.ps1 を実行（cargo build --release が走り Cargo.lock も更新される）
+./build_release.ps1
+# 3. Cargo.toml と Cargo.lock をまとめてコミット
+git add Cargo.toml Cargo.lock
+git commit -m "chore: バージョンをX.Y.Zに更新"
+```
+
+その後：
 
 ```sh
 git checkout main

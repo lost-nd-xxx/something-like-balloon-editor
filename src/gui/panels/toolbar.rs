@@ -7,8 +7,9 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
     ui.horizontal(|ui| {
         let is_c = app.state.is_balloonc();
         let direct = app.state.direct_image_mode;
-        // 画像編集なしモードでは色変更を常に無効扱い
-        let no_color = direct || app.state.no_balloon_color;
+        // プロジェクト未読み込み・画像編集なしモードでは色変更を常に無効扱い
+        let no_project = app.state.asset_dir().is_none();
+        let no_color = no_project || direct || app.state.no_balloon_color;
         let bulk = app.state.bulk_color_mode;
 
 
