@@ -228,6 +228,26 @@ impl BalloonEditorApp {
                 self.state.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
+            PendingAction::NewProject(name) => {
+                match crate::core::project::create_project_safe(&name) {
+                    Ok(dir) => {
+                        self.state.selected_asset_dir = Some(dir);
+                        self.state.dirty = false;
+                        self.reload_asset_folder(ctx);
+                    }
+                    Err(e) => { self.err(format!("新規作成エラー: {}", e)); }
+                }
+            }
+            PendingAction::ImportFolder(src, name) => {
+                match crate::core::project::create_project_from_folder(&src, &name) {
+                    Ok((dir, _)) => {
+                        self.state.selected_asset_dir = Some(dir);
+                        self.state.dirty = false;
+                        self.reload_asset_folder(ctx);
+                    }
+                    Err(e) => { self.err(format!("プロジェクト作成エラー: {}", e)); }
+                }
+            }
         }
     }
 
@@ -483,6 +503,9 @@ impl BalloonEditorApp {
         if let Some(v) = parsed_i.get("directory") {
             self.state.basic_info.insert("directory".to_string(), v.clone());
         }
+        if let Some(v) = parsed_i.get("refresh") {
+            self.state.basic_info.insert("refresh".to_string(), v.clone());
+        }
 
         // name の食い違いを検出（descript と install の双方に name がある場合）
         if let (Some(nd), Some(ni)) = (parsed_d.get("name"), parsed_i.get("name")) {
@@ -687,7 +710,7 @@ impl BalloonEditorApp {
             let confirmed = rfd::MessageDialog::new()
                 .set_title("確認")
                 .set_description(format!(
-                    "出力先フォルダが既に存在します。\n上書きしますか？\n\n{}",
+                    "出力先フォルダが既に存在します。\n削除して再作成しますか？\n\n{}",
                     output_dir.display()
                 ))
                 .set_buttons(rfd::MessageButtons::YesNo)
@@ -1322,7 +1345,7 @@ impl eframe::App for BalloonEditorApp {
                     };
 
                     if exists {
-                        ui.colored_label(egui::Color32::from_rgb(220, 80, 80), "[!] 既に存在するプロジェクト名です。保存すると上書きされます。");
+                        ui.colored_label(egui::Color32::from_rgb(220, 80, 80), "[!] 既に存在するプロジェクト名です。保存すると削除して再作成されます。");
                     }
 
                     ui.add_space(8.0);
@@ -1330,6 +1353,10 @@ impl eframe::App for BalloonEditorApp {
                         if ui.button("作成").clicked() {
                             if name_trimmed.is_empty() {
                                 self.state.new_project_warning = "プロジェクト名を入力してください。".to_string();
+                            } else if self.state.dirty {
+                                self.state.pending_unsaved_action =
+                                    Some(crate::gui::state::PendingAction::NewProject(name_trimmed.clone()));
+                                close = true;
                             } else {
                                 match crate::core::project::create_project_safe(&name_trimmed) {
                                     Ok(dir) => {
@@ -1376,7 +1403,7 @@ impl eframe::App for BalloonEditorApp {
                     if name_trimmed.is_empty() {
                         self.state.import_folder_warning = String::new();
                     } else if already_exists {
-                        self.state.import_folder_warning = "[!] 既に存在するプロジェクト名です。作成すると上書きされます。".to_string();
+                        self.state.import_folder_warning = "[!] 既に存在するプロジェクト名です。作成すると削除して再作成されます。".to_string();
                     } else {
                         self.state.import_folder_warning = String::new();
                     }
@@ -1391,7 +1418,11 @@ impl eframe::App for BalloonEditorApp {
                     ui.horizontal(|ui| {
                         let can_create = !name_trimmed.is_empty();
                         if ui.add_enabled(can_create, egui::Button::new("作成")).clicked() {
-                            match crate::core::project::create_project_from_folder(&src, &name_trimmed) {
+                            if self.state.dirty {
+                                self.state.pending_unsaved_action =
+                                    Some(crate::gui::state::PendingAction::ImportFolder(src.clone(), name_trimmed.clone()));
+                                close = true;
+                            } else { match crate::core::project::create_project_from_folder(&src, &name_trimmed) {
                                 Ok((dir, filled)) => {
                                     // blendmethod 警告チェック
                                     let bm_warns = crate::core::project::check_blendmethod_warnings(&dir);
@@ -1440,7 +1471,7 @@ impl eframe::App for BalloonEditorApp {
                                 Err(e) => {
                                     self.err(format!("プロジェクト作成エラー: {}", e));
                                 }
-                            }
+                            } }
                         }
                         if ui.button("キャンセル").clicked() {
                             close = true;
@@ -1477,7 +1508,7 @@ impl eframe::App for BalloonEditorApp {
                     if name_trimmed.is_empty() || is_same {
                         self.state.save_as_project_warning = String::new();
                     } else if already_exists {
-                        self.state.save_as_project_warning = "[!] 既に存在するプロジェクト名です。上書きされます。".to_string();
+                        self.state.save_as_project_warning = "[!] 既に存在するプロジェクト名です。削除して再作成されます。".to_string();
                     } else {
                         self.state.save_as_project_warning = String::new();
                     }

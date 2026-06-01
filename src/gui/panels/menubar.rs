@@ -87,23 +87,27 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
 
         // 編集メニュー
         ui.menu_button("編集", |ui| {
-            if ui.button("元に戻す  (Ctrl+Z)").clicked() {
-                ui.close_menu();
-                if app.state.undo() {
-                    app.rebuild_and_refresh(ctx);
-                } else {
-                    app.refresh_preview_texture(ctx);
+            let no_project = app.state.asset_dir().is_none();
+            ui.add_enabled_ui(!no_project, |ui| {
+                if ui.button("元に戻す  (Ctrl+Z)").clicked() {
+                    ui.close_menu();
+                    if app.state.undo() {
+                        app.rebuild_and_refresh(ctx);
+                    } else {
+                        app.refresh_preview_texture(ctx);
+                    }
                 }
-            }
-            if ui.button("やり直し  (Ctrl+Y)").clicked() {
-                ui.close_menu();
-                if app.state.redo() {
-                    app.rebuild_and_refresh(ctx);
-                } else {
-                    app.refresh_preview_texture(ctx);
+                if ui.button("やり直し  (Ctrl+Y)").clicked() {
+                    ui.close_menu();
+                    if app.state.redo() {
+                        app.rebuild_and_refresh(ctx);
+                    } else {
+                        app.refresh_preview_texture(ctx);
+                    }
                 }
-            }
+            });
             ui.separator();
+            ui.add_enabled_ui(!no_project, |ui| {
             if ui.button("バルーン設定を初期値に戻す").clicked() {
                 ui.close_menu();
                 app.state.push_undo();
@@ -129,6 +133,7 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                 app.state.individual_texts.clear();
                 app.rebuild_and_refresh(ctx);
             }
+            }); // add_enabled_ui(!no_project) バルーン設定を初期値に戻す
             ui.separator();
             ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
                 if ui.button("レイアウト定義を編集...").clicked() {
@@ -161,10 +166,13 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
 
         // 表示メニュー
         ui.menu_button("表示", |ui| {
-            if ui.button("プレビュー更新  (F5)").clicked() {
-                ui.close_menu();
-                app.reload_asset_folder_keep_texts(ctx);
-            }
+            let no_project = app.state.asset_dir().is_none();
+            ui.add_enabled_ui(!no_project, |ui| {
+                if ui.button("プレビュー更新  (F5)").clicked() {
+                    ui.close_menu();
+                    app.reload_asset_folder_keep_texts(ctx);
+                }
+            });
             ui.separator();
             if ui.button("ウィンドウレイアウトをリセット").clicked() {
                 ui.close_menu();

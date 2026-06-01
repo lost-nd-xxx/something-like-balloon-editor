@@ -245,10 +245,10 @@ pub fn create_project_raw(name: &str) -> anyhow::Result<PathBuf> {
         fs::write(&descript_path, initial_descript_text())?;
     }
 
-    // install.txt: charset のみ（バルーン素材としての最小要件）
+    // install.txt: 最小要件のみ書き込む
     let install_path = project_dir.join("install.txt");
     if !install_path.exists() {
-        fs::write(&install_path, "charset,UTF-8\n")?;
+        fs::write(&install_path, "charset,UTF-8\ntype,balloon\nname,\ndirectory,\nrefresh,0\n")?;
     }
 
     Ok(project_dir)
@@ -259,11 +259,11 @@ const IMPORT_EXTENSIONS: &[&str] = &["png", "pna", "pnr", "txt"];
 
 /// 既存フォルダの内容を新規プロジェクトとしてコピーして作成します。
 /// `src_dir` 内の *.png / *.pna / *.pnr / *.txt を `projects/<name>/` にコピーします。
-/// 既に同名プロジェクトが存在する場合は `_backup` に退避し、失敗時はロールバックします。
+/// 既に同名プロジェクトが存在する場合は一時フォルダに退避し、失敗時はロールバックします。
 /// 戻り値: (プロジェクトディレクトリ, 補完したblendmethodキーリスト)
 pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<(PathBuf, Vec<String>)> {
     let project_dir = get_project_dir(name)?;
-    let backup_dir = project_dir.with_file_name(format!("{}_backup", name));
+    let backup_dir = project_dir.with_file_name(format!(".__slbe_tmp_{}", name));
 
     let exists = project_dir.exists();
 
@@ -385,12 +385,12 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
 }
 
 /// 重複対策を統合した安全なプロジェクト作成処理。
-/// 既に同名フォルダが存在する場合、一時的に `_backup` にリネーム退避し、
-/// 新規作成の成功を確認した上でバックアップを削除します。
-/// 万が一失敗した場合は、作成中だった中途半端なフォルダをクリーンアップし、バックアップから元の状態にロールバックします。
+/// 既に同名フォルダが存在する場合、一時的に `.__slbe_tmp_<name>` にリネーム退避し、
+/// 新規作成の成功を確認した上で削除します。
+/// 万が一失敗した場合は、作成中だった中途半端なフォルダをクリーンアップし、退避フォルダから元の状態にロールバックします。
 pub fn create_project_safe(name: &str) -> anyhow::Result<PathBuf> {
     let project_dir = get_project_dir(name)?;
-    let backup_dir = project_dir.with_file_name(format!("{}_backup", name));
+    let backup_dir = project_dir.with_file_name(format!(".__slbe_tmp_{}", name));
 
     let exists = project_dir.exists();
 

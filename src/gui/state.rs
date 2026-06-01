@@ -92,6 +92,10 @@ pub enum PendingAction {
     OpenProject(String),
     /// アプリを終了する
     Quit,
+    /// 新規プロジェクトを作成する（プロジェクト名）
+    NewProject(String),
+    /// フォルダからプロジェクトを作成する（フォルダパス, プロジェクト名）
+    ImportFolder(std::path::PathBuf, String),
 }
 
 /// ドラッグ編集中の状態

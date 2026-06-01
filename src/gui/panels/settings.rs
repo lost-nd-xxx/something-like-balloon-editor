@@ -14,11 +14,15 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
     ui.separator();
 
     let png_preview = app.state.png_preview_name.is_some();
+    let no_project = app.state.asset_dir().is_none();
     ScrollArea::vertical().show(ui, |ui| {
+        // プロジェクト未読み込み時は全設定をグレーアウト
+        ui.add_enabled_ui(!no_project, |ui| {
         show_basic_info_section(ui, app);
+        });
         ui.separator();
         // PNG一覧プレビュー中はバルーン設定・位置編集をグレーアウト＆非表示
-        ui.add_enabled_ui(!png_preview, |ui| {
+        ui.add_enabled_ui(!png_preview && !no_project, |ui| {
             if !png_preview {
                 egui::CollapsingHeader::new("バルーン設定詳細")
                     .default_open(true)
@@ -77,6 +81,20 @@ fn show_basic_info_section(ui: &mut Ui, app: &mut BalloonEditorApp) {
                         ui.end_row();
                     }
                 });
+
+            // refresh チェックボックス（install.txt の refresh,1 / refresh,0）
+            ui.separator();
+            let refresh_val = app.state.basic_info
+                .get("refresh").map(|v| v.trim() == "1").unwrap_or(false);
+            let mut checked = refresh_val;
+            let cb = ui.checkbox(&mut checked, "インストール時に既存ファイルを全消去")
+                .on_hover_text("install.txt の refresh,1 に対応。\nSSP がインストール時に既存ファイルを全て削除してから上書きします。");
+            if cb.changed() {
+                let val = if checked { "1" } else { "0" };
+                app.state.basic_info.insert("refresh".to_string(), val.to_string());
+                app.state.install_text = set_descript_value(&app.state.install_text, "refresh", val);
+                app.state.push_undo();
+            }
         });
 }
 
