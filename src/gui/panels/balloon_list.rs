@@ -20,6 +20,9 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                 .max_height(section_h)
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
+                    if balloons.is_empty() {
+                        ui.label("（バルーンなし）");
+                    }
                     for name in &balloons {
                         let label = name.trim_end_matches(".png");
                         let selected = app.state.selected_balloon == *name;
@@ -55,7 +58,7 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
                     if png_list.is_empty() {
-                        ui.label("（PNGファイルなし）");
+                        ui.label("（PNG/PNRファイルなし）");
                     }
                     for (i, name) in png_list.iter().enumerate() {
                         // .png は拡張子を落として表示。.pnr 等はそのまま表示して区別する

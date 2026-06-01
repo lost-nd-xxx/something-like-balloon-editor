@@ -154,27 +154,15 @@ pub struct AppState {
     pub canvas_bg:          CanvasBg,
     /// 単色背景の色（チェッカー選択中も保持）
     pub canvas_bg_solid_color: (u8, u8, u8),
-    #[allow(dead_code)]
-    pub edit_mode:          String, // "" / パーツID
     pub panel_left_width:   f32,
     pub panel_right_width:  f32,
     pub window_size:        [f32; 2],
     pub preview_generating: bool,
     pub show_bg_color_window: bool,
 
-    // --- パーツターゲット ---
-    #[allow(dead_code)]
-    pub parts_targets:      Vec<(String, String)>, // (表示名, キー)
-    #[allow(dead_code)]
-    pub parts_target:       String,                // 選択中の表示名
-
     // --- アンドゥ/リドゥ ---
     pub undo_stack: Vec<Snapshot>,
     pub redo_stack: Vec<Snapshot>,
-
-    // --- 読み込み中フラグ ---
-    #[allow(dead_code)]
-    pub loading: bool,
 
     // --- 画像サイズから動的に計算したデフォルト値（descript.txtにキーがない場合のUI表示用）---
     pub dynamic_defaults: HashMap<String, String>,
@@ -207,7 +195,6 @@ pub struct AppState {
     pub show_new_project_window: bool,
     pub new_project_name: String,
     pub new_project_warning: String,
-
     /// 未保存の編集があるか（dirtyフラグ）。保存/読み込み/新規で false に戻す。
     pub dirty: bool,
     /// 未保存確認ダイアログ後に実行する保留アクション
@@ -336,12 +323,8 @@ impl AppState {
             overlay_mode:      String::new(),
             canvas_bg:         CanvasBg::Checker,
             canvas_bg_solid_color: (255, 255, 255),
-            edit_mode:         String::new(),
-            parts_targets:     vec![("全て".to_string(), "all".to_string())],
-            parts_target:      "全て".to_string(),
             undo_stack:        Vec::new(),
             redo_stack:        Vec::new(),
-            loading:           false,
             editing_buf:       None,
             dynamic_defaults:  HashMap::new(),
             drag_edit_target:  None,
@@ -356,7 +339,6 @@ impl AppState {
             show_new_project_window: false,
             new_project_name: String::new(),
             new_project_warning: String::new(),
-
             dirty: false,
             pending_unsaved_action: None,
             allow_close: false,
