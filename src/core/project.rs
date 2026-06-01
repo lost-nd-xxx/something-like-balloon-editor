@@ -55,23 +55,200 @@ pub fn project_exists(name: &str) -> bool {
     }
 }
 
+/// 新規プロジェクト用 descript.txt の初期テキストを返す。
+///
+/// アプリが管理する全フィールドの初期値を書き込む。
+/// これにより「フォールバック値が使われる」状況を防ぎ、
+/// descript.txt を正本として機能させる。
+///
+/// 注意: 色フィールドは descript.txt 上で `.r/.g/.b` の3キーに分割して記録する。
+///       ここでの値は field_def.rs の ACCORDION_GROUPS の default と一致させること。
+///       コメントアウト行（// で始まる行）はアプリが認識しない任意フィールドの
+///       「位置確保」用。ユーザーが手書きで有効化できる。
+fn initial_descript_text() -> String {
+    [
+        "charset,UTF-8",
+        "",
+        "// ── 基本情報 ─────────────────────────────────",
+        "type,balloon",
+        "name,",
+        "craftman,",
+        "craftmanw,",
+        "craftmanurl,",
+        "homeurl,",
+        "",
+        "// ── 通常文字 ───────────────────────────────",
+        "font.name,ＭＳ ゴシック",
+        "font.height,12",
+        "font.color.r,0",
+        "font.color.g,0",
+        "font.color.b,0",
+        "font.shadowcolor.r,none",
+        "font.shadowcolor.g,none",
+        "font.shadowcolor.b,none",
+        "font.shadowstyle,offset",
+        "",
+        "// ── 操作無効の文字 ──────────────────────────",
+        "// disable.font.color.r,none",
+        "// disable.font.color.g,none",
+        "// disable.font.color.b,none",
+        "",
+        "// ── 選択肢(非選択) ──────────────────────────",
+        "cursor.notselect.blendmethod,copypen",
+        "cursor.notselect.style,none",
+        "cursor.notselect.font.color.r,0",
+        "cursor.notselect.font.color.g,0",
+        "cursor.notselect.font.color.b,0",
+        "cursor.notselect.font.shadowcolor.r,none",
+        "cursor.notselect.font.shadowcolor.g,none",
+        "cursor.notselect.font.shadowcolor.b,none",
+        "cursor.notselect.font.shadowstyle,offset",
+        "cursor.notselect.pen.color.r,0",
+        "cursor.notselect.pen.color.g,0",
+        "cursor.notselect.pen.color.b,0",
+        "cursor.notselect.brush.color.r,0",
+        "cursor.notselect.brush.color.g,0",
+        "cursor.notselect.brush.color.b,0",
+        "",
+        "// ── 選択肢(選択中) ──────────────────────────",
+        "cursor.blendmethod,copypen",
+        "cursor.style,square",
+        "cursor.font.color.r,255",
+        "cursor.font.color.g,255",
+        "cursor.font.color.b,255",
+        "cursor.font.shadowcolor.r,none",
+        "cursor.font.shadowcolor.g,none",
+        "cursor.font.shadowcolor.b,none",
+        "cursor.font.shadowstyle,offset",
+        "cursor.pen.color.r,127",
+        "cursor.pen.color.g,127",
+        "cursor.pen.color.b,0",
+        "cursor.brush.color.r,0",
+        "cursor.brush.color.g,0",
+        "cursor.brush.color.b,255",
+        "",
+        "// ── アンカー(非選択) ─────────────────────────",
+        "anchor.notselect.blendmethod,copypen",
+        "anchor.notselect.style,none",
+        "anchor.notselect.font.color.r,0",
+        "anchor.notselect.font.color.g,0",
+        "anchor.notselect.font.color.b,0",
+        "anchor.notselect.font.shadowcolor.r,none",
+        "anchor.notselect.font.shadowcolor.g,none",
+        "anchor.notselect.font.shadowcolor.b,none",
+        "anchor.notselect.font.shadowstyle,offset",
+        "anchor.notselect.pen.color.r,0",
+        "anchor.notselect.pen.color.g,0",
+        "anchor.notselect.pen.color.b,0",
+        "anchor.notselect.brush.color.r,0",
+        "anchor.notselect.brush.color.g,0",
+        "anchor.notselect.brush.color.b,0",
+        "",
+        "// ── アンカー(選択中) ─────────────────────────",
+        "anchor.blendmethod,copypen",
+        "anchor.style,underline",
+        "anchor.font.color.r,0",
+        "anchor.font.color.g,0",
+        "anchor.font.color.b,0",
+        "anchor.font.shadowcolor.r,none",
+        "anchor.font.shadowcolor.g,none",
+        "anchor.font.shadowcolor.b,none",
+        "anchor.font.shadowstyle,offset",
+        "anchor.pen.color.r,127",
+        "anchor.pen.color.g,127",
+        "anchor.pen.color.b,0",
+        "anchor.brush.color.r,0",
+        "anchor.brush.color.g,0",
+        "anchor.brush.color.b,0",
+        "",
+        "// ── アンカー(訪問済み) ───────────────────────",
+        "anchor.visited.blendmethod,copypen",
+        "anchor.visited.style,none",
+        "anchor.visited.font.color.r,85",
+        "anchor.visited.font.color.g,85",
+        "anchor.visited.font.color.b,85",
+        "anchor.visited.font.shadowcolor.r,none",
+        "anchor.visited.font.shadowcolor.g,none",
+        "anchor.visited.font.shadowcolor.b,none",
+        "anchor.visited.font.shadowstyle,offset",
+        "anchor.visited.pen.color.r,0",
+        "anchor.visited.pen.color.g,0",
+        "anchor.visited.pen.color.b,0",
+        "anchor.visited.brush.color.r,0",
+        "anchor.visited.brush.color.g,0",
+        "anchor.visited.brush.color.b,0",
+        "",
+        "// ── SSTPメッセージ ───────────────────────────",
+        "sstpmessage.font.name,ＭＳ ゴシック",
+        "sstpmessage.font.height,10",
+        "sstpmessage.font.color.r,0",
+        "sstpmessage.font.color.g,0",
+        "sstpmessage.font.color.b,192",
+        "",
+        "// ── カウンタ数値 ─────────────────────────────",
+        "number.font.name,ＭＳ ゴシック",
+        "number.font.height,10",
+        "number.font.color.r,0",
+        "number.font.color.g,0",
+        "number.font.color.b,0",
+        "",
+        "",
+        "// ── 入力ボックス（balloonc系） ────────────────",
+        "communicatebox.font.name,ＭＳ ゴシック",
+        "communicatebox.font.color.r,0",
+        "communicatebox.font.color.g,0",
+        "communicatebox.font.color.b,0",
+        "communicatebox.background.color.r,255",
+        "communicatebox.background.color.g,255",
+        "communicatebox.background.color.b,255",
+        "communicatebox.x,10",
+        "communicatebox.y,10",
+        "communicatebox.width,100",
+        "communicatebox.height,30",
+        "",
+        "// ── UI位置 ───────────────────────────────────",
+        "validrect.left,10",
+        "validrect.top,10",
+        "validrect.right,-10",
+        "validrect.bottom,-10",
+        "wordwrappoint.x,-20",
+        "arrow0.x,-5",
+        "arrow0.y,5",
+        "arrow1.x,-5",
+        "arrow1.y,-5",
+        "clickwaitmarker.x,-10",
+        "clickwaitmarker.y,-10",
+        "sstpmarker.x,5",
+        "sstpmarker.y,-5",
+        "sstpmessage.x,10",
+        "sstpmessage.y,-5",
+        "onlinemarker.x,20",
+        "onlinemarker.y,-10",
+        "number.xr,-20",
+        "number.y,-5",
+        "",
+    ].join("\n")
+}
+
 /// 新規プロジェクトを物理的に作成します。
-/// `projects/<name>/` フォルダを作成し、空の `descript.txt` と `install.txt` を配置します。
+/// `projects/<name>/` フォルダを作成し、初期値入りの `descript.txt` と
+/// `charset,UTF-8` のみの `install.txt` を配置します。
 pub fn create_project_raw(name: &str) -> anyhow::Result<PathBuf> {
     let project_dir = get_project_dir(name)?;
-    
+
     // projects ベースディレクトリと、個別プロジェクトフォルダを作成
     fs::create_dir_all(&project_dir)?;
 
-    // 空の descript.txt と install.txt を生成
+    // descript.txt: アプリが管理する全フィールドの初期値を書き込む
     let descript_path = project_dir.join("descript.txt");
     if !descript_path.exists() {
-        fs::write(&descript_path, "")?;
+        fs::write(&descript_path, initial_descript_text())?;
     }
 
+    // install.txt: charset のみ（バルーン素材としての最小要件）
     let install_path = project_dir.join("install.txt");
     if !install_path.exists() {
-        fs::write(&install_path, "")?;
+        fs::write(&install_path, "charset,UTF-8\n")?;
     }
 
     Ok(project_dir)

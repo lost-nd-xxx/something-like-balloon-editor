@@ -937,7 +937,39 @@ fn draw_sample_text(
 
     // 各色
     let font_color    = get_color(parsed, "font.color").unwrap_or(Rgb(0,0,0));
-    let disable_color = get_color(parsed, "disable.font.color").unwrap_or(Rgb(128,128,128));
+    // disable.font.color が none（または未指定）のとき SSP はバルーン画像色と通常文字色を
+    // ミックスした色で描画する。プレビューではバルーン画像中央付近の色を代表値として使う。
+    let disable_color = get_color(parsed, "disable.font.color").unwrap_or_else(|| {
+        let cx = (img.width() / 2) as i64;
+        let cy = (img.height() / 2) as i64;
+        // 中央 3x3 の不透明ピクセルを平均してバルーン画像色を推定する
+        let mut sum = (0i64, 0i64, 0i64);
+        let mut cnt = 0i64;
+        for dy in -1..=1i64 {
+            for dx in -1..=1i64 {
+                let x = (cx + dx).clamp(0, img.width() as i64 - 1) as u32;
+                let y = (cy + dy).clamp(0, img.height() as i64 - 1) as u32;
+                let px = img.get_pixel(x, y);
+                if px[3] > 0 {
+                    sum.0 += px[0] as i64;
+                    sum.1 += px[1] as i64;
+                    sum.2 += px[2] as i64;
+                    cnt += 1;
+                }
+            }
+        }
+        let bg = if cnt > 0 {
+            Rgb((sum.0 / cnt) as u8, (sum.1 / cnt) as u8, (sum.2 / cnt) as u8)
+        } else {
+            Rgb(255, 255, 255) // 全透明なら白とみなす
+        };
+        // SSP: (font_color + bg * 2) / 3 に相当（文字色を薄く見せる）
+        Rgb(
+            ((font_color.0 as i32 + bg.0 as i32 * 2) / 3) as u8,
+            ((font_color.1 as i32 + bg.1 as i32 * 2) / 3) as u8,
+            ((font_color.2 as i32 + bg.2 as i32 * 2) / 3) as u8,
+        )
+    });
 
     // 文字色解決: NoDeco(0)は通常文字色、Simple(1)/RasterOp(2)はfont.color.*を使用
     let resolve_color = |key: &str, fallback: Rgb| -> Rgb {
@@ -953,7 +985,7 @@ fn draw_sample_text(
     let cursor_brush     = if cursor_state     == 1 { choice_sel_color } else { get_color(parsed, "cursor.brush.color").unwrap_or(Rgb(0,0,255)) };
     let cursor_pen       = if cursor_state     == 1 { choice_sel_color } else { get_color(parsed, "cursor.pen.color").unwrap_or(Rgb(0,0,0)) };
     let anchor_brush     = if anchor_state     == 1 { anchor_sel_color } else { get_color(parsed, "anchor.brush.color").unwrap_or(Rgb(0,0,0)) };
-    let anchor_pen       = if anchor_state     == 1 { anchor_sel_color } else { get_color(parsed, "anchor.pen.color").unwrap_or(Rgb(0,0,255)) };
+    let anchor_pen       = if anchor_state     == 1 { anchor_sel_color } else { get_color(parsed, "anchor.pen.color").unwrap_or(Rgb(127,127,0)) };
     let anchor_vis_brush = if anchor_vis_state == 1 { anchor_vis_color } else { get_color(parsed, "anchor.visited.brush.color").unwrap_or(Rgb(0,0,0)) };
     let anchor_vis_pen   = if anchor_vis_state == 1 { anchor_vis_color } else { get_color(parsed, "anchor.visited.pen.color").unwrap_or(Rgb(0,0,0)) };
     let cursor_ns_brush  = if cursor_ns_state  == 1 { choice_color     } else { get_color(parsed, "cursor.notselect.brush.color").unwrap_or(Rgb(0,0,0)) };

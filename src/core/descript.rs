@@ -27,7 +27,7 @@ pub fn parse_descript(text: &str) -> HashMap<String, String> {
 pub fn set_descript_value(text: &str, key: &str, value: &str) -> String {
     let pattern = Regex::new(&format!(r"(?m)^({key_esc}),(.*)$", key_esc = regex::escape(key)))
         .unwrap();
-    let commented = Regex::new(&format!(r"(?m)^//{key_esc},(.*)$", key_esc = regex::escape(key)))
+    let commented = Regex::new(&format!(r"(?m)^//\s*{key_esc},(.*)$", key_esc = regex::escape(key)))
         .unwrap();
 
     if value.is_empty() {
