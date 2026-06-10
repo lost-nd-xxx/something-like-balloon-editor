@@ -1,4 +1,5 @@
 use egui::{Context, Ui};
+use crate::core::layout::sort_key;
 use crate::gui::app::BalloonEditorApp;
 
 pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
@@ -23,8 +24,20 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                     if balloons.is_empty() {
                         ui.label("（バルーンなし）");
                     }
+                    let mut prev_group: Option<(u8, u32)> = None;
                     for name in &balloons {
-                        let label = name.trim_end_matches(".png");
+                        // 系統境界（sort_key の第0・第1要素ペアが変わる箇所）に水平線
+                        let stem = name.trim_end_matches(".png");
+                        let sk = sort_key(stem);
+                        let group = (sk.0, sk.1);
+                        if let Some(pg) = prev_group {
+                            if pg != group {
+                                ui.separator();
+                            }
+                        }
+                        prev_group = Some(group);
+
+                        let label = stem;
                         let selected = app.state.selected_balloon == *name;
                         let resp = ui.selectable_label(selected, label);
                         if resp.clicked() && !selected {
