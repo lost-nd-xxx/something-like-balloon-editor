@@ -27,8 +27,32 @@ fn strip_unc_prefix(path: &std::path::Path) -> PathBuf {
     }
 }
 
+/// プロジェクト名として使用できない文字・パターンを検証します。
+/// `..`、パスセパレータ（`/` `\`）、絶対パスを拒否します。
+pub fn validate_project_name(name: &str) -> anyhow::Result<()> {
+    if name.is_empty() {
+        anyhow::bail!("プロジェクト名が空です。");
+    }
+    // 絶対パスを拒否（Windows ドライブレター C:\ 等も含む）
+    if std::path::Path::new(name).is_absolute() {
+        anyhow::bail!("プロジェクト名に絶対パスは使用できません: {}", name);
+    }
+    // パストラバーサルおよびセパレータを拒否
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        anyhow::bail!("プロジェクト名に使用できない文字が含まれています: {}", name);
+    }
+    // ファイル名として単一コンポーネントであることを確認
+    let p = std::path::Path::new(name);
+    let mut comps = p.components();
+    match (comps.next(), comps.next()) {
+        (Some(std::path::Component::Normal(_)), None) => Ok(()),
+        _ => anyhow::bail!("プロジェクト名にパスを含む文字は使用できません: {}", name),
+    }
+}
+
 /// 指定されたプロジェクト名に対応するフォルダパスを返します。
 pub fn get_project_dir(name: &str) -> anyhow::Result<PathBuf> {
+    validate_project_name(name)?;
     let base = get_projects_base_dir()?;
     Ok(base.join(name))
 }
