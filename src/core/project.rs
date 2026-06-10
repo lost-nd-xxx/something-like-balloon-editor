@@ -340,6 +340,10 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
             // profile/slbe/ サブフォルダは中身ごとコピー（files.txt / profile.json 等）
             // SSPが作成する profile/var.txt 等は対象外
             if path.is_dir() {
+                // ジャンクション（is_symlink が true を返す）はスキップ
+                if entry.metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+                    continue;
+                }
                 let dir_name = path.file_name()
                     .and_then(|n| n.to_str())
                     .map(|n| n.to_lowercase())
@@ -347,11 +351,17 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
                 if dir_name == "profile" {
                     // profile/slbe/ のみを対象とする
                     let slbe_src = path.join("slbe");
-                    if slbe_src.is_dir() {
+                    // slbe 自体がジャンクションでないことを確認
+                    let slbe_is_junction = fs::symlink_metadata(&slbe_src)
+                        .map(|m| m.file_type().is_symlink())
+                        .unwrap_or(false);
+                    if slbe_src.is_dir() && !slbe_is_junction {
                         let dest_slbe = project_dir.join("profile").join("slbe");
                         fs::create_dir_all(&dest_slbe)?;
                         for sub in fs::read_dir(&slbe_src).into_iter().flatten().flatten() {
                             let sub_path = sub.path();
+                            // シンボリックリンクは情報漏洩の経路になるためスキップ
+                            if sub.metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) { continue; }
                             if !sub_path.is_file() { continue; }
                             let sub_name = sub_path.file_name().unwrap();
                             let sub_name_lower = sub_name.to_string_lossy().to_lowercase();
@@ -367,6 +377,10 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
                 continue;
             }
 
+            // シンボリックリンクは情報漏洩の経路になるためスキップ
+            if entry.metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+                continue;
+            }
             if !path.is_file() {
                 continue;
             }
