@@ -27,8 +27,32 @@ fn strip_unc_prefix(path: &std::path::Path) -> PathBuf {
     }
 }
 
+/// プロジェクト名として使用できない文字・パターンを検証します。
+/// `..`、パスセパレータ（`/` `\`）、絶対パスを拒否します。
+pub fn validate_project_name(name: &str) -> anyhow::Result<()> {
+    if name.is_empty() {
+        anyhow::bail!("プロジェクト名が空です。");
+    }
+    // 絶対パスを拒否（Windows ドライブレター C:\ 等も含む）
+    if std::path::Path::new(name).is_absolute() {
+        anyhow::bail!("プロジェクト名に絶対パスは使用できません: {}", name);
+    }
+    // パストラバーサルおよびセパレータを拒否
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        anyhow::bail!("プロジェクト名に使用できない文字が含まれています: {}", name);
+    }
+    // ファイル名として単一コンポーネントであることを確認
+    let p = std::path::Path::new(name);
+    let mut comps = p.components();
+    match (comps.next(), comps.next()) {
+        (Some(std::path::Component::Normal(_)), None) => Ok(()),
+        _ => anyhow::bail!("プロジェクト名にパスを含む文字は使用できません: {}", name),
+    }
+}
+
 /// 指定されたプロジェクト名に対応するフォルダパスを返します。
 pub fn get_project_dir(name: &str) -> anyhow::Result<PathBuf> {
+    validate_project_name(name)?;
     let base = get_projects_base_dir()?;
     Ok(base.join(name))
 }
@@ -280,6 +304,33 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
     let result = (|| -> anyhow::Result<()> {
         fs::create_dir_all(&project_dir)?;
 
+        // readme ファイル名を descript.txt から先読みする（拡張子不問のコピーのため）
+        // descript.txt が存在しない・パースできない場合は "readme.txt" をデフォルトとする
+        let readme_name_lower = {
+            let descript_bytes = fs::read(src_dir.join("descript.txt")).unwrap_or_default();
+            // charset 未確定のためバイト列で charset 行を探して変換後にパースする
+            let descript_text = {
+                let check = descript_bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&descript_bytes);
+                if std::str::from_utf8(check).is_ok() {
+                    String::from_utf8_lossy(&descript_bytes).into_owned()
+                } else {
+                    let charset = detect_charset_from_bytes(&descript_bytes);
+                    let enc = charset.as_deref()
+                        .and_then(|cs| encoding_rs::Encoding::for_label(cs.as_bytes()))
+                        .unwrap_or(encoding_rs::SHIFT_JIS);
+                    enc.decode(&descript_bytes).0.into_owned()
+                }
+            };
+            let parsed = parse_descript(&descript_text);
+            let raw = parsed.get("readme").map(|s| s.as_str()).unwrap_or("readme.txt");
+            // パストラバーサル対策: ファイル名部分のみ使用
+            std::path::Path::new(raw)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("readme.txt")
+                .to_lowercase()
+        };
+
         let entries = fs::read_dir(src_dir)
             .map_err(|e| anyhow::anyhow!("フォルダの読み取りに失敗しました: {}", e))?;
 
@@ -289,6 +340,10 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
             // profile/slbe/ サブフォルダは中身ごとコピー（files.txt / profile.json 等）
             // SSPが作成する profile/var.txt 等は対象外
             if path.is_dir() {
+                // ジャンクション（is_symlink が true を返す）はスキップ
+                if entry.metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+                    continue;
+                }
                 let dir_name = path.file_name()
                     .and_then(|n| n.to_str())
                     .map(|n| n.to_lowercase())
@@ -296,11 +351,17 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
                 if dir_name == "profile" {
                     // profile/slbe/ のみを対象とする
                     let slbe_src = path.join("slbe");
-                    if slbe_src.is_dir() {
+                    // slbe 自体がジャンクションでないことを確認
+                    let slbe_is_junction = fs::symlink_metadata(&slbe_src)
+                        .map(|m| m.file_type().is_symlink())
+                        .unwrap_or(false);
+                    if slbe_src.is_dir() && !slbe_is_junction {
                         let dest_slbe = project_dir.join("profile").join("slbe");
                         fs::create_dir_all(&dest_slbe)?;
                         for sub in fs::read_dir(&slbe_src).into_iter().flatten().flatten() {
                             let sub_path = sub.path();
+                            // シンボリックリンクは情報漏洩の経路になるためスキップ
+                            if sub.metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) { continue; }
                             if !sub_path.is_file() { continue; }
                             let sub_name = sub_path.file_name().unwrap();
                             let sub_name_lower = sub_name.to_string_lossy().to_lowercase();
@@ -316,9 +377,21 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
                 continue;
             }
 
+            // シンボリックリンクは情報漏洩の経路になるためスキップ
+            if entry.metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+                continue;
+            }
             if !path.is_file() {
                 continue;
             }
+            let file_name = path.file_name().unwrap();
+            let file_name_lower = file_name.to_string_lossy().to_lowercase();
+
+            // readme は後で素通しコピーするためここではスキップ
+            if file_name_lower == readme_name_lower {
+                continue;
+            }
+
             let ext = path.extension()
                 .and_then(|e| e.to_str())
                 .map(|e| e.to_lowercase());
@@ -327,14 +400,9 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
                 continue;
             }
             // updates.txt はネットワーク更新用ファイルのためコピー対象外
-            let file_name_lower = path.file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.to_lowercase())
-                .unwrap_or_default();
             if file_name_lower == "updates.txt" {
                 continue;
             }
-            let file_name = path.file_name().unwrap();
             // files.txt は profile/slbe/files.txt として取り込む
             let dest = if file_name_lower == "files.txt" {
                 let slbe_dir = project_dir.join("profile").join("slbe");
@@ -358,6 +426,26 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
                 fs::copy(&path, &dest)?;
             }
         }
+
+        // readme を素通しコピー（文字コードを変換しない。export と同一方針）
+        // 拡張子不問で取り込む（.md / .html / 拡張子なし 等に対応）
+        let readme_src = src_dir.join(&readme_name_lower);
+        if readme_src.is_file() {
+            // ファイル名の大文字小文字が異なる場合に備え read_dir で実ファイル名を探す
+            let actual = fs::read_dir(src_dir)
+                .ok()
+                .and_then(|entries| {
+                    entries.flatten().find(|e| {
+                        e.file_name().to_string_lossy().to_lowercase() == readme_name_lower
+                    })
+                })
+                .map(|e| e.path());
+            if let Some(actual_path) = actual {
+                let dest = project_dir.join(actual_path.file_name().unwrap());
+                fs::copy(&actual_path, &dest)?;
+            }
+        }
+
         Ok(())
     })();
 

@@ -256,3 +256,42 @@ projects/
 ```
 
 `profile/slbe/` 以下はこのアプリ固有のファイルです。SSPには配布不要です（出力時には含まれません）。
+
+---
+
+## このアプリが扱わない項目について
+
+このアプリは「テキスト正本方式」を採用しています。`descript.txt` などのテキストファイルは読み込んだ内容を**そのまま保持**し、編集 UI で扱う項目だけを書き換えて保存・出力します。
+
+そのため、**このアプリの編集画面に無い項目も、`descript.txt` に書かれていればそのまま保持・出力されます**。下記の項目はプレビューや編集 UI には反映されませんが、記述が消えたり壊れたりすることはありません。外部エディタで自由に追記できます。
+
+### 編集 UI には無いが、記述は保持される項目
+
+下記は編集画面に項目がありませんが、`descript.txt` に書かれていれば**そのまま保持・出力**されます。外部エディタで追記できます。
+
+- `id`、`dpi`
+- `cursor` / `mousecursor` / `mousecursor.text` / `mousecursor.wait` / `mousecursor.arrow`（各種カーソル画像）
+- `font.bold` / `font.italic` / `font.underline` / `font.strike` / `font.outline`（文字装飾。本アプリは文字色のみ対応）
+- `disable.font.*`（「操作無効の文字」は**文字色のみ対応**。フォント名・サイズなどそれ以外の指定は保持のみ）
+- `paint_transparent_region_black`
+- `windowposition.x` / `windowposition.y` / `windowposition.limit`
+- `recommended.ghost` / `recommended.ghost.path`
+- パーツ画像のファイル名カスタム指定（`arrow.filename` / `marker.filename` / `clickwaitmarker.filename` / `onlinemarker.filename` / `sstpmarker.filename` など。個別設定ファイル `balloon*s.txt` の仕様）
+
+これらの値はプレビューには反映されませんが、記述が消えたり壊れたりすることはありません。
+
+### 出力時に固定値で書き込まれる項目
+
+- `use_self_alpha` / `use_input_alpha` / `overlay_outside_balloon` は、出力時に **`1` で書き込まれます**。
+
+### オンライン表示画像のアニメーション
+
+- オンライン表示画像（`online*.png`）のアニメーションには対応していません。プレビューでは先頭のコマを静止表示します。
+
+### 画像形式
+
+- 読み込み・プレビュー・編集に対応する画像形式は **PNG（および `.pna` / `.pnr`）のみ**です。その他の形式の対応予定はありません。
+
+### readme
+
+- `readme.txt`（または `descript.txt` の `readme,ファイル名` で指定されたファイル）は、**中身を編集せずそのまま出力にコピー**します。文章の編集は外部エディタで行ってください。

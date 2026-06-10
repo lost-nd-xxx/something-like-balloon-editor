@@ -1338,19 +1338,23 @@ impl eframe::App for BalloonEditorApp {
                     });
 
                     let name_trimmed = self.state.new_project_name.trim().to_string();
-                    let exists = if !name_trimmed.is_empty() {
+                    let name_valid = !name_trimmed.is_empty()
+                        && crate::core::project::validate_project_name(&name_trimmed).is_ok();
+                    let exists = if name_valid {
                         crate::core::project::project_exists(&name_trimmed)
                     } else {
                         false
                     };
 
-                    if exists {
+                    if !name_trimmed.is_empty() && !name_valid {
+                        ui.colored_label(egui::Color32::from_rgb(220, 80, 80), "[!] 使用できない文字が含まれています（/ \\ .. や絶対パスは不可）。");
+                    } else if exists {
                         ui.colored_label(egui::Color32::from_rgb(220, 80, 80), "[!] 既に存在するプロジェクト名です。保存すると削除して再作成されます。");
                     }
 
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("作成").clicked() {
+                        if ui.add_enabled(name_valid, egui::Button::new("作成")).clicked() {
                             if name_trimmed.is_empty() {
                                 self.state.new_project_warning = "プロジェクト名を入力してください。".to_string();
                             } else if self.state.dirty {
@@ -1397,11 +1401,15 @@ impl eframe::App for BalloonEditorApp {
                     ui.label("プロジェクト名:");
                     ui.text_edit_singleline(&mut self.state.import_folder_project_name);
 
-                    // リアルタイム重複チェック
+                    // リアルタイム重複・不正文字チェック
                     let name_trimmed = self.state.import_folder_project_name.trim().to_string();
-                    let already_exists = crate::core::project::project_exists(&name_trimmed);
+                    let name_valid = !name_trimmed.is_empty()
+                        && crate::core::project::validate_project_name(&name_trimmed).is_ok();
+                    let already_exists = name_valid && crate::core::project::project_exists(&name_trimmed);
                     if name_trimmed.is_empty() {
                         self.state.import_folder_warning = String::new();
+                    } else if !name_valid {
+                        self.state.import_folder_warning = "[!] 使用できない文字が含まれています（/ \\ .. や絶対パスは不可）。".to_string();
                     } else if already_exists {
                         self.state.import_folder_warning = "[!] 既に存在するプロジェクト名です。作成すると削除して再作成されます。".to_string();
                     } else {
@@ -1416,7 +1424,7 @@ impl eframe::App for BalloonEditorApp {
 
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        let can_create = !name_trimmed.is_empty();
+                        let can_create = name_valid;
                         if ui.add_enabled(can_create, egui::Button::new("作成")).clicked() {
                             if self.state.dirty {
                                 self.state.pending_unsaved_action =
@@ -1503,10 +1511,14 @@ impl eframe::App for BalloonEditorApp {
                     ui.text_edit_singleline(&mut self.state.save_as_project_name);
 
                     let name_trimmed = self.state.save_as_project_name.trim().to_string();
-                    let already_exists = crate::core::project::project_exists(&name_trimmed);
+                    let name_valid = !name_trimmed.is_empty()
+                        && crate::core::project::validate_project_name(&name_trimmed).is_ok();
+                    let already_exists = name_valid && crate::core::project::project_exists(&name_trimmed);
                     let is_same = name_trimmed == current_name;
                     if name_trimmed.is_empty() || is_same {
                         self.state.save_as_project_warning = String::new();
+                    } else if !name_valid {
+                        self.state.save_as_project_warning = "[!] 使用できない文字が含まれています（/ \\ .. や絶対パスは不可）。".to_string();
                     } else if already_exists {
                         self.state.save_as_project_warning = "[!] 既に存在するプロジェクト名です。削除して再作成されます。".to_string();
                     } else {
@@ -1521,7 +1533,7 @@ impl eframe::App for BalloonEditorApp {
 
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        let can_save = !name_trimmed.is_empty() && !is_same;
+                        let can_save = name_valid && !is_same;
                         if ui.add_enabled(can_save, egui::Button::new("保存")).clicked() {
                             let name = name_trimmed.clone();
                             self.save_project_as(&name, ctx);
