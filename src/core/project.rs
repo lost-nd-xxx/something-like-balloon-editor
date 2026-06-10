@@ -304,6 +304,33 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
     let result = (|| -> anyhow::Result<()> {
         fs::create_dir_all(&project_dir)?;
 
+        // readme ファイル名を descript.txt から先読みする（拡張子不問のコピーのため）
+        // descript.txt が存在しない・パースできない場合は "readme.txt" をデフォルトとする
+        let readme_name_lower = {
+            let descript_bytes = fs::read(src_dir.join("descript.txt")).unwrap_or_default();
+            // charset 未確定のためバイト列で charset 行を探して変換後にパースする
+            let descript_text = {
+                let check = descript_bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&descript_bytes);
+                if std::str::from_utf8(check).is_ok() {
+                    String::from_utf8_lossy(&descript_bytes).into_owned()
+                } else {
+                    let charset = detect_charset_from_bytes(&descript_bytes);
+                    let enc = charset.as_deref()
+                        .and_then(|cs| encoding_rs::Encoding::for_label(cs.as_bytes()))
+                        .unwrap_or(encoding_rs::SHIFT_JIS);
+                    enc.decode(&descript_bytes).0.into_owned()
+                }
+            };
+            let parsed = parse_descript(&descript_text);
+            let raw = parsed.get("readme").map(|s| s.as_str()).unwrap_or("readme.txt");
+            // パストラバーサル対策: ファイル名部分のみ使用
+            std::path::Path::new(raw)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("readme.txt")
+                .to_lowercase()
+        };
+
         let entries = fs::read_dir(src_dir)
             .map_err(|e| anyhow::anyhow!("フォルダの読み取りに失敗しました: {}", e))?;
 
@@ -343,6 +370,14 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
             if !path.is_file() {
                 continue;
             }
+            let file_name = path.file_name().unwrap();
+            let file_name_lower = file_name.to_string_lossy().to_lowercase();
+
+            // readme は後で素通しコピーするためここではスキップ
+            if file_name_lower == readme_name_lower {
+                continue;
+            }
+
             let ext = path.extension()
                 .and_then(|e| e.to_str())
                 .map(|e| e.to_lowercase());
@@ -351,14 +386,9 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
                 continue;
             }
             // updates.txt はネットワーク更新用ファイルのためコピー対象外
-            let file_name_lower = path.file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.to_lowercase())
-                .unwrap_or_default();
             if file_name_lower == "updates.txt" {
                 continue;
             }
-            let file_name = path.file_name().unwrap();
             // files.txt は profile/slbe/files.txt として取り込む
             let dest = if file_name_lower == "files.txt" {
                 let slbe_dir = project_dir.join("profile").join("slbe");
@@ -382,6 +412,26 @@ pub fn create_project_from_folder(src_dir: &Path, name: &str) -> anyhow::Result<
                 fs::copy(&path, &dest)?;
             }
         }
+
+        // readme を素通しコピー（文字コードを変換しない。export と同一方針）
+        // 拡張子不問で取り込む（.md / .html / 拡張子なし 等に対応）
+        let readme_src = src_dir.join(&readme_name_lower);
+        if readme_src.is_file() {
+            // ファイル名の大文字小文字が異なる場合に備え read_dir で実ファイル名を探す
+            let actual = fs::read_dir(src_dir)
+                .ok()
+                .and_then(|entries| {
+                    entries.flatten().find(|e| {
+                        e.file_name().to_string_lossy().to_lowercase() == readme_name_lower
+                    })
+                })
+                .map(|e| e.path());
+            if let Some(actual_path) = actual {
+                let dest = project_dir.join(actual_path.file_name().unwrap());
+                fs::copy(&actual_path, &dest)?;
+            }
+        }
+
         Ok(())
     })();
 
