@@ -127,8 +127,11 @@ pub fn diff_against_descript(individual_text: &str, descript_text: &str) -> Stri
 
 /// マイナス値座標の変換。
 /// raw が "-" 始まりのとき `size + val`（右下基点）、そうでなければ `val`（左上基点）。
+///
+/// raw は外部ファイル（descript.txt）由来で i32 の全域を取りうるため、
+/// 加算は飽和演算で行う（debug ビルドでの overflow panic を避ける）。
 pub fn pos_str(raw: &str, size: i32) -> i32 {
     let negative = raw.starts_with('-');
     let val: i32 = raw.parse().unwrap_or(0);
-    if negative { size + val } else { val }
+    if negative { size.saturating_add(val) } else { val }
 }

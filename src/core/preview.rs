@@ -65,8 +65,10 @@ impl Sess {
             let measured_w = sess.measure(text);
             let bmp_w = (measured_w + 4.0) as i32;
             let bmp_h = (size_px * 1.5 + 4.0) as i32;
-            if bmp_w == 0 || bmp_h == 0 { return true; }
-            sess.ensure_bmp(bmp_w, bmp_h);
+            // 非正のサイズは DIBSection を確保できず、バッファ長計算も破綻する
+            if bmp_w <= 0 || bmp_h <= 0 { return true; }
+            // 確保に失敗したら描画を諦める（呼び出し元のフォールバックへ回さず握りつぶす）
+            if !sess.ensure_bmp(bmp_w, bmp_h) { return true; }
             sess.render_to_bmp(text, bmp_w, bmp_h);
             let stride = sess.bmp_stride();
             let alpha_mask: Vec<u32> = sess.raw_buf[..(stride * bmp_h) as usize].to_vec();
@@ -113,8 +115,10 @@ impl Sess {
             let measured = sess.measure(text);
             let bmp_w = (size_px * 1.5 + 4.0) as i32;
             let bmp_h = (measured + 4.0) as i32;
-            if bmp_w == 0 || bmp_h == 0 { return true; }
-            sess.ensure_bmp(bmp_w, bmp_h);
+            // 非正のサイズは DIBSection を確保できず、バッファ長計算も破綻する
+            if bmp_w <= 0 || bmp_h <= 0 { return true; }
+            // 確保に失敗したら描画を諦める（呼び出し元のフォールバックへ回さず握りつぶす）
+            if !sess.ensure_bmp(bmp_w, bmp_h) { return true; }
             sess.render_to_bmp(text, bmp_w, bmp_h);
             let stride = sess.bmp_stride();
             let alpha_mask: Vec<u32> = sess.raw_buf[..(stride * bmp_h) as usize].to_vec();
@@ -187,6 +191,19 @@ impl Default for DrawOptions {
 
 struct ValidRect { left: i32, top: i32, right: i32, bottom: i32 }
 
+/// descript.txt から読んだフォント高さを描画に使える範囲へ丸める。
+///
+/// font.height 系は外部ファイル由来のため負値・極端な巨大値・NaN が入りうる。
+/// これらはビットマップサイズ計算（`size_px * 1.5 + 4.0`）を負値や桁溢れに
+/// 導き、DIBSection の確保失敗やバッファ長の破綻を招くため、ここで塞ぐ。
+fn clamp_font_height(v: f32, default: f32) -> f32 {
+    if v.is_finite() { v.clamp(MIN_FONT_HEIGHT, MAX_FONT_HEIGHT) } else { default }
+}
+
+/// 描画に使うフォント高さの下限・上限（px）
+const MIN_FONT_HEIGHT: f32 = 1.0;
+const MAX_FONT_HEIGHT: f32 = 512.0;
+
 // ---------------------------------------------------------------------------
 // エントリポイント
 // ---------------------------------------------------------------------------
@@ -215,8 +232,8 @@ pub fn draw_preview(
     });
 
     // GDI セッション（フォント高さ = font.height の値、なければ 12）
-    let font_height: f32 = parsed.get("font.height")
-        .and_then(|s| s.parse().ok()).unwrap_or(12.0);
+    let font_height: f32 = clamp_font_height(
+        parsed.get("font.height").and_then(|s| s.parse().ok()).unwrap_or(12.0), 12.0);
     // 縦書き（vertical,1）。communicatebox は SSP 仕様でも横書きのまま
     let vertical = parsed.get("vertical").map(|s| s.trim() == "1").unwrap_or(false)
         && !opts.is_balloonc;
@@ -696,8 +713,8 @@ fn draw_parts(
     // SSTPメッセージ
     let ssx = pos_str(parsed.get("sstpmessage.x").map(|s| s.as_str()).unwrap_or("10"), iw);
     let ssy = pos_str(parsed.get("sstpmessage.y").map(|s| s.as_str()).unwrap_or("-5"), ih);
-    let sstp_fh: f32 = parsed.get("sstpmessage.font.height")
-        .and_then(|s| s.parse().ok()).unwrap_or(10.0);
+    let sstp_fh: f32 = clamp_font_height(
+        parsed.get("sstpmessage.font.height").and_then(|s| s.parse().ok()).unwrap_or(10.0), 10.0);
     let sstp_col = get_color(parsed, "sstpmessage.font.color")
         .unwrap_or(Rgb(0, 0, 192));
     let sstp_font_name = {
@@ -719,8 +736,8 @@ fn draw_parts(
     // カウンタ数値
     let num_xr: i32 = parsed.get("number.xr").and_then(|s| s.parse().ok()).unwrap_or(-20);
     let num_y   = pos_str(parsed.get("number.y").map(|s| s.as_str()).unwrap_or("-5"), ih);
-    let num_fh: f32 = parsed.get("number.font.height")
-        .and_then(|s| s.parse().ok()).unwrap_or(10.0);
+    let num_fh: f32 = clamp_font_height(
+        parsed.get("number.font.height").and_then(|s| s.parse().ok()).unwrap_or(10.0), 10.0);
     let num_col = get_color(parsed, "number.font.color")
         .unwrap_or(Rgb(0, 0, 0));
     let num_font_name = {
@@ -1008,8 +1025,8 @@ fn draw_sample_text(
     sess: &mut Sess,
 ) {
     let iw = img.width() as i32;
-    let font_height: f32 = parsed.get("font.height")
-        .and_then(|s| s.parse().ok()).unwrap_or(12.0);
+    let font_height: f32 = clamp_font_height(
+        parsed.get("font.height").and_then(|s| s.parse().ok()).unwrap_or(12.0), 12.0);
     let line_h = (font_height + 2.0) as i32;
 
     // 影設定

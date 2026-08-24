@@ -649,7 +649,15 @@ fn show_int_widget(
     let mut val: i32 = editing_mine.as_deref().unwrap_or(current_str).parse().unwrap_or(0);
     // スピナーの最小幅を広げる（桁数の多い値でも読みやすく）
     ui.spacing_mut().interact_size.x = 72.0;
-    let response = ui.add(egui::DragValue::new(&mut val).speed(1.0));
+    // フォントサイズ系は負値・極端な値が描画側のビットマップサイズ計算を壊すため、
+    // UI 段階で入力可能な範囲を絞る（core 側にも同等のクランプがある）
+    let drag = egui::DragValue::new(&mut val).speed(1.0);
+    let drag = if field.key.ends_with("font.height") {
+        drag.range(1..=512)
+    } else {
+        drag
+    };
+    let response = ui.add(drag);
 
     // フォーカス取得（クリック・キー操作）またはドラッグ開始で編集開始
     if (response.gained_focus() || response.drag_started()) && editing_mine.is_none() {

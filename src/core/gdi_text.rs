@@ -65,8 +65,14 @@ impl GdiSession {
     }
 
     /// 必要なサイズの DIBSection を確保する。サイズが変わるたびに作り直す。
-    pub fn ensure_bmp(&mut self, w: i32, h: i32) {
-        if w == self.bmp_w && h == self.bmp_h { return; }
+    ///
+    /// 確保に失敗した場合は `false` を返し、既存のビットマップを維持する。
+    /// 呼び出し側は失敗時に描画を中止すること。成功したと誤認して古い
+    /// （より小さい）バッファへ新サイズでアクセスすると領域外参照になる。
+    #[must_use]
+    pub fn ensure_bmp(&mut self, w: i32, h: i32) -> bool {
+        if w <= 0 || h <= 0 { return false; }
+        if w == self.bmp_w && h == self.bmp_h { return true; }
         unsafe {
             let mut dib_ptr: *mut u32 = std::ptr::null_mut();
             if let Some(new_bmp) = create_dib_section(self.hdc, w, h, &mut dib_ptr) {
@@ -76,6 +82,9 @@ impl GdiSession {
                 self.bmp_w = w;
                 self.bmp_h = h;
                 self.dib_ptr = dib_ptr;
+                true
+            } else {
+                false
             }
         }
     }
@@ -91,9 +100,12 @@ impl GdiSession {
             // 縦書き（escapement 2700）では (x, y) が「列の右端・先頭文字の上端」になる
             let (tx, ty) = if self.vertical { (w - 2, 0) } else { (0, 0) };
             let _ = TextOutW(self.hdc, tx, ty, wide_no_null);
-            let pixel_count = (w * h) as usize;
+            // コピー長は実際に確保済みの DIBSection のサイズから求める。
+            // 引数の w/h をそのまま使うと、ensure_bmp が失敗していた場合に
+            // 実バッファより長くコピーして領域外参照になる。
+            let pixel_count = (self.bmp_w as i64 * self.bmp_h as i64).max(0) as usize;
             self.raw_buf.resize(pixel_count, 0u32);
-            if !self.dib_ptr.is_null() {
+            if !self.dib_ptr.is_null() && pixel_count > 0 {
                 std::ptr::copy_nonoverlapping(self.dib_ptr, self.raw_buf.as_mut_ptr(), pixel_count);
             }
         }
@@ -268,9 +280,10 @@ fn draw_text_gdi_impl(
     } else {
         ((measured + 4.0) as i32, (size_px * 1.5 + 4.0) as i32)
     };
-    if w == 0 || h == 0 { return false; }
+    // 非正のサイズは DIBSection を確保できず、バッファ長計算も破綻する
+    if w <= 0 || h <= 0 { return false; }
 
-    sess.ensure_bmp(w, h);
+    if !sess.ensure_bmp(w, h) { return false; }
     sess.render_to_bmp(text, w, h);
     let stride = sess.bmp_stride();
     let alpha_mask: Vec<u32> = sess.raw_buf[..(stride * h) as usize].to_vec();
