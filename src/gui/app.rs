@@ -320,6 +320,37 @@ impl BalloonEditorApp {
         }
     }
 
+    /// 単体プレビュー中の画像に回転/反転を適用してファイルを書き換える。
+    /// 90度単位のため無劣化。undo 対象外（逆操作で自力復帰できる）。
+    /// 同名 .pna がある場合は RGB を .png（.pnr）、アルファを .pna に分離保存してペア形式を維持する。
+    /// .pna が無い場合は 32bit RGBA で保存する（24bit+tRNS 等は RGBA に正規化される。
+    /// 出力時に use_self_alpha,1 が書き込まれるため SSP 上の表示に影響はない）。
+    pub fn transform_preview_png(&mut self, t: crate::core::composer::ImageTransform, ctx: &Context) {
+        let Some(name) = self.state.png_preview_name.clone() else { return };
+        let Some(asset_dir) = self.state.asset_dir() else { return };
+        let path = asset_dir.join(&name);
+        let rgba = match crate::core::composer::open_png_rgba(&path) {
+            Ok(img) => img,
+            Err(e) => { self.err(format!("画像の読み込みに失敗しました:\n{}", e)); return; }
+        };
+        let out = crate::core::composer::apply_transform(&rgba, t);
+
+        let pna_path = path.with_extension("pna");
+        let result = if pna_path.exists() {
+            save_png_pna_pair(&out, &path, &pna_path)
+        } else {
+            save_png_optimized(&out, &path)
+        };
+        if let Err(e) = result {
+            self.err(format!("画像の保存に失敗しました:\n{}", e));
+            return;
+        }
+
+        // キャッシュを再構築し、単体プレビューを更新する
+        self.reload_asset_folder_keep_texts(ctx);
+        self.preview_single_png(&name, ctx);
+    }
+
     /// PNG ファイルを名前変更し、files.txt 内の参照も更新する
     /// files.txt ありモードでは物理ファイルが存在しないバルーンも対象のため、
     /// 物理ファイルが存在する場合のみリネームし、files.txt は常に更新する。
@@ -2300,6 +2331,32 @@ fn save_png_optimized(img: &RgbaImage, path: &std::path::Path) -> anyhow::Result
     Ok(())
 }
 
+/// RGBA 画像を .png（RGB 部分）と .pna（アルファ部分）のペアに分離して保存する。
+/// 24bit PNG + .pna 形式の素材の回転/反転時にペア形式を維持するために使う。
+fn save_png_pna_pair(img: &RgbaImage, png_path: &std::path::Path, pna_path: &std::path::Path) -> anyhow::Result<()> {
+    use image::codecs::png::{PngEncoder, CompressionType, FilterType};
+    use image::ImageEncoder;
+    let (w, h) = img.dimensions();
+
+    let mut rgb = image::RgbImage::new(w, h);
+    let mut alpha = image::GrayImage::new(w, h);
+    for (x, y, px) in img.enumerate_pixels() {
+        rgb.put_pixel(x, y, image::Rgb([px[0], px[1], px[2]]));
+        alpha.put_pixel(x, y, image::Luma([px[3]]));
+    }
+
+    let write = |path: &std::path::Path, raw: &[u8], color: image::ExtendedColorType| -> anyhow::Result<()> {
+        let file = std::fs::File::create(path)?;
+        let writer = std::io::BufWriter::new(file);
+        let encoder = PngEncoder::new_with_quality(writer, CompressionType::Best, FilterType::Adaptive);
+        encoder.write_image(raw, w, h, color)?;
+        Ok(())
+    };
+    write(png_path, rgb.as_raw(), image::ExtendedColorType::Rgb8)?;
+    write(pna_path, alpha.as_raw(), image::ExtendedColorType::L8)?;
+    Ok(())
+}
+
 /// インポートダイアログ用プレビューテクスチャを生成する。
 /// 画像をチェッカー背景に合成してから egui テクスチャとして返す。
 fn load_import_preview_texture(ctx: &egui::Context, path: &std::path::Path) -> Option<egui::TextureHandle> {
@@ -2330,3 +2387,4 @@ fn load_import_preview_texture(ctx: &egui::Context, path: &std::path::Path) -> O
     );
     Some(ctx.load_texture("import_preview", color_image, TextureOptions::NEAREST))
 }
+

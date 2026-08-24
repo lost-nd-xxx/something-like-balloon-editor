@@ -21,7 +21,10 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
         show_basic_info_section(ui, app);
         });
         ui.separator();
-        // PNG一覧プレビュー中はバルーン設定・位置編集をグレーアウト＆非表示
+        // PNG一覧プレビュー中はバルーン設定・位置編集の代わりに画像編集を表示
+        if png_preview && !no_project {
+            show_png_edit_section(ui, app, ctx);
+        }
         ui.add_enabled_ui(!png_preview && !no_project, |ui| {
             if !png_preview {
                 egui::CollapsingHeader::new("バルーン設定詳細")
@@ -34,6 +37,42 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
             }
         });
     });
+}
+
+/// 単体プレビュー中の画像編集セクション（回転/反転）
+fn show_png_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
+    use crate::core::composer::ImageTransform;
+
+    egui::CollapsingHeader::new("画像編集")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("操作するとファイルが直接書き換わります（元に戻すには逆の操作）")
+                    .color(ui.visuals().text_color())
+                    .small(),
+            );
+            ui.add_space(4.0);
+
+            let ops: &[(&str, ImageTransform)] = &[
+                ("左90°回転",  ImageTransform::RotateLeft),
+                ("右90°回転",  ImageTransform::RotateRight),
+                ("180°回転",   ImageTransform::Rotate180),
+                ("左右反転",   ImageTransform::FlipH),
+                ("上下反転",   ImageTransform::FlipV),
+            ];
+            let mut clicked: Option<ImageTransform> = None;
+            ui.horizontal_wrapped(|ui| {
+                for (label, op) in ops {
+                    if ui.button(*label).clicked() {
+                        clicked = Some(*op);
+                    }
+                }
+            });
+            if let Some(op) = clicked {
+                app.transform_preview_png(op, ctx);
+            }
+        });
+    ui.separator();
 }
 
 fn show_basic_info_section(ui: &mut Ui, app: &mut BalloonEditorApp) {
@@ -150,6 +189,16 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
     // 表示可否フラグ
     let show_c  = is_c;
     let show_ks = !is_c;
+
+    // 縦書き設定（バルーン全体のテキスト方向のため、アコーディオン外に独立配置）
+    if show_ks {
+        use crate::gui::field_def::VERTICAL_FIELD;
+        ui.horizontal(|ui| {
+            ui.label(VERTICAL_FIELD.label);
+            show_field_widget(ui, app, ctx, &VERTICAL_FIELD, &cfg_key, use_individual);
+        });
+        ui.separator();
+    }
 
     for group in ACCORDION_GROUPS {
         let visible = match group.visibility {
@@ -290,7 +339,19 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                             } else {
                                 true
                             };
-                            ui.label(field.label);
+                            // 縦書き時、arrow0/arrow1 は右/左スクロールの意味になる（UKADOC）
+                            let label = if is_vertical_effective(app, &cfg_key) {
+                                match field.key {
+                                    "arrow0.x" => "矢印(右) X",
+                                    "arrow0.y" => "矢印(右) Y",
+                                    "arrow1.x" => "矢印(左) X",
+                                    "arrow1.y" => "矢印(左) Y",
+                                    _ => field.label,
+                                }
+                            } else {
+                                field.label
+                            };
+                            ui.label(label);
                             ui.add_enabled_ui(enabled, |ui| {
                                 show_field_widget(ui, app, ctx, field, &cfg_key, use_individual);
                             });
@@ -300,6 +361,15 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
 
             });
     }
+}
+
+/// 縦書き（vertical,1）が有効か（個別設定 → 共通設定の順で解決）
+fn is_vertical_effective(app: &BalloonEditorApp, cfg_key: &str) -> bool {
+    app.state.individual_texts.get(cfg_key)
+        .and_then(|t| parse_descript(t).get("vertical").cloned())
+        .or_else(|| parse_descript(&app.state.descript_text).get("vertical").cloned())
+        .map(|v| v.trim() == "1")
+        .unwrap_or(false)
 }
 
 /// 個別設定→共通設定→dynamic_defaults→field.default の優先順でキーの値を解決する。
@@ -383,6 +453,9 @@ fn show_field_widget(
         }
         FieldType::Dropdown => {
             show_dropdown_widget(ui, app, ctx, field, &current_str, cfg_key, use_individual);
+        }
+        FieldType::Bool => {
+            show_bool_widget(ui, app, ctx, field, &current_str, cfg_key, use_individual);
         }
     }
 }
@@ -567,12 +640,19 @@ fn show_int_widget(
 ) {
     use crate::gui::state::EditingBuf;
 
-    let mut val: i32 = current_str.parse().unwrap_or(0);
+    // 編集中（editing_buf がこのフィールドを指す間）はバッファ値を DragValue の外部値にする。
+    // 毎フレーム descript の値でリセットすると、DragValue がドラッグ中の精密値を
+    // 「外部変更があった」とみなして破棄し、ドラッグで値が動かなくなるため。
+    let editing_mine = app.state.editing_buf.as_ref()
+        .filter(|b| b.field_key == field.key)
+        .map(|b| b.current.clone());
+    let mut val: i32 = editing_mine.as_deref().unwrap_or(current_str).parse().unwrap_or(0);
     // スピナーの最小幅を広げる（桁数の多い値でも読みやすく）
     ui.spacing_mut().interact_size.x = 72.0;
     let response = ui.add(egui::DragValue::new(&mut val).speed(1.0));
 
-    if response.gained_focus() {
+    // フォーカス取得（クリック・キー操作）またはドラッグ開始で編集開始
+    if (response.gained_focus() || response.drag_started()) && editing_mine.is_none() {
         app.state.push_undo();
         app.state.editing_buf = Some(EditingBuf {
             field_key: field.key.to_string(),
@@ -590,6 +670,7 @@ fn show_int_widget(
     }
 
     let commit = response.lost_focus()
+        || response.drag_stopped()
         || ui.input(|i| i.key_pressed(egui::Key::Enter));
     if commit {
         let mine = app.state.editing_buf.take_if(|b| b.field_key == field.key);
@@ -637,6 +718,29 @@ fn show_dropdown_widget(
             app.state.descript_text.clone()
         };
         let new_text = set_descript_value(&descript_text, field.key, &selected);
+        write_back(app, ctx, cfg_key, use_individual, new_text);
+    }
+}
+
+/// チェックボックスウィジェット（"0"/"1"。OFF時も "0" を明示的に書く）
+fn show_bool_widget(
+    ui: &mut Ui,
+    app: &mut BalloonEditorApp,
+    ctx: &egui::Context,
+    field: &crate::gui::field_def::FieldDef,
+    current_str: &str,
+    cfg_key: &str,
+    use_individual: bool,
+) {
+    let mut checked = current_str.trim() == "1";
+    if ui.checkbox(&mut checked, "").changed() {
+        app.state.push_undo();
+        let descript_text = if use_individual {
+            app.state.individual_texts.get(cfg_key).cloned().unwrap_or_default()
+        } else {
+            app.state.descript_text.clone()
+        };
+        let new_text = set_descript_value(&descript_text, field.key, if checked { "1" } else { "0" });
         write_back(app, ctx, cfg_key, use_individual, new_text);
     }
 }
@@ -700,9 +804,22 @@ fn show_drag_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &egui::C
             let area_target = if is_c { DragEditTarget::CommunicateBox } else { DragEditTarget::ValidRect };
             all_entries.push((area_label, area_target));
             if !is_c {
-                all_entries.push(("折り返し X", DragEditTarget::WordWrap));
-                if parts.contains_key("arrow0.png")    { all_entries.push(("矢印(上)",     DragEditTarget::Arrow0));       }
-                if parts.contains_key("arrow1.png")    { all_entries.push(("矢印(下)",     DragEditTarget::Arrow1));       }
+                // 縦書き時は折り返しが wordwrappoint.y になり、
+                // arrow0/arrow1 は右/左スクロールの意味になる（UKADOC）
+                let cfg_key = format!("{}s.txt", sel.trim_end_matches(".png"));
+                let vertical = is_vertical_effective(app, &cfg_key);
+                if vertical {
+                    all_entries.push(("折り返し Y", DragEditTarget::WordWrapY));
+                } else {
+                    all_entries.push(("折り返し X", DragEditTarget::WordWrap));
+                }
+                let (arrow0_label, arrow1_label) = if vertical {
+                    ("矢印(右)", "矢印(左)")
+                } else {
+                    ("矢印(上)", "矢印(下)")
+                };
+                if parts.contains_key("arrow0.png")    { all_entries.push((arrow0_label,   DragEditTarget::Arrow0));       }
+                if parts.contains_key("arrow1.png")    { all_entries.push((arrow1_label,   DragEditTarget::Arrow1));       }
                 if parts.contains_key("clickwait.png") { all_entries.push(("クリック待ち",   DragEditTarget::ClickWait));    }
                 if has_sstp                             { all_entries.push(("SSTPマーカー",   DragEditTarget::SstpMarker));   }
                 if has_sstp                             { all_entries.push(("SSTPメッセージ", DragEditTarget::SstpMessage));  }

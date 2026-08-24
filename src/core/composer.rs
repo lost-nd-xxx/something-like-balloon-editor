@@ -186,6 +186,28 @@ pub fn flip_horizontal(img: &RgbaImage) -> RgbaImage {
     image::imageops::flip_horizontal(img)
 }
 
+/// 画像単体編集の変換操作（90度単位のため無劣化）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageTransform {
+    RotateLeft,   // 左90°回転（反時計回り）
+    RotateRight,  // 右90°回転（時計回り）
+    Rotate180,    // 180°回転
+    FlipH,        // 左右反転
+    FlipV,        // 上下反転
+}
+
+/// 変換操作を適用した新しい画像を返す
+pub fn apply_transform(img: &RgbaImage, t: ImageTransform) -> RgbaImage {
+    use image::imageops;
+    match t {
+        ImageTransform::RotateLeft  => imageops::rotate270(img),
+        ImageTransform::RotateRight => imageops::rotate90(img),
+        ImageTransform::Rotate180   => imageops::rotate180(img),
+        ImageTransform::FlipH       => imageops::flip_horizontal(img),
+        ImageTransform::FlipV       => imageops::flip_vertical(img),
+    }
+}
+
 /// LayerList に従ってバルーン画像を合成して返す
 pub fn build_balloon_from_layout(
     balloon_dir: &Path,

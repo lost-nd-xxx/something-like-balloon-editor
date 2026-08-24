@@ -78,6 +78,7 @@ pub enum DragEditTarget {
     Counter,         // number.xr / number.y
     ValidRect,       // validrect.top/bottom/left/right（4辺まとめ）
     WordWrap,        // wordwrappoint.x
+    WordWrapY,       // wordwrappoint.y（縦書き時の折り返し）
     CommunicateBox,  // communicatebox 4辺まとめ
 }
 
