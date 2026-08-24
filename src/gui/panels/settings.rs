@@ -567,12 +567,19 @@ fn show_int_widget(
 ) {
     use crate::gui::state::EditingBuf;
 
-    let mut val: i32 = current_str.parse().unwrap_or(0);
+    // 編集中（editing_buf がこのフィールドを指す間）はバッファ値を DragValue の外部値にする。
+    // 毎フレーム descript の値でリセットすると、DragValue がドラッグ中の精密値を
+    // 「外部変更があった」とみなして破棄し、ドラッグで値が動かなくなるため。
+    let editing_mine = app.state.editing_buf.as_ref()
+        .filter(|b| b.field_key == field.key)
+        .map(|b| b.current.clone());
+    let mut val: i32 = editing_mine.as_deref().unwrap_or(current_str).parse().unwrap_or(0);
     // スピナーの最小幅を広げる（桁数の多い値でも読みやすく）
     ui.spacing_mut().interact_size.x = 72.0;
     let response = ui.add(egui::DragValue::new(&mut val).speed(1.0));
 
-    if response.gained_focus() {
+    // フォーカス取得（クリック・キー操作）またはドラッグ開始で編集開始
+    if (response.gained_focus() || response.drag_started()) && editing_mine.is_none() {
         app.state.push_undo();
         app.state.editing_buf = Some(EditingBuf {
             field_key: field.key.to_string(),
@@ -590,6 +597,7 @@ fn show_int_widget(
     }
 
     let commit = response.lost_focus()
+        || response.drag_stopped()
         || ui.input(|i| i.key_pressed(egui::Key::Enter));
     if commit {
         let mine = app.state.editing_buf.take_if(|b| b.field_key == field.key);
