@@ -18,19 +18,9 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
             }
             if ui.button("フォルダからプロジェクトを作成...").clicked() {
                 ui.close_menu();
-                let picked = rfd::FileDialog::new()
-                    .set_title("取り込む素材フォルダを選択")
-                    .pick_folder();
-                if let Some(src) = picked {
-                    let folder_name = src.file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("")
-                        .to_string();
-                    app.state.import_folder_src = src;
-                    app.state.import_folder_project_name = folder_name;
-                    app.state.import_folder_warning = String::new();
-                    app.state.show_import_folder_window = true;
-                }
+                // update 内で rfd を同期呼び出しするとそのフレームが完結しないため、
+                // 要求だけ立てて別スレッドで開く
+                app.state.request_pick_import_folder = true;
             }
             ui.separator();
             ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
@@ -54,18 +44,8 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
             ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
                 if ui.button("画像をプロジェクトに追加...").clicked() {
                     ui.close_menu();
-                    let picked = rfd::FileDialog::new()
-                        .set_title("インポートする画像を選択")
-                        .add_filter("PNG画像", &["png"])
-                        .pick_files();
-                    if let Some(files) = picked {
-                        if !files.is_empty() {
-                            app.state.import_queue = files;
-                            app.state.import_queue_index = 0;
-                            app.state.show_import_window = true;
-                            app.preset_import_from_current_queue(ctx);
-                        }
-                    }
+                    // 同上（update 内での rfd 同期呼び出しを避ける）
+                    app.state.request_pick_import_images = true;
                 }
             });
             ui.add_enabled_ui(app.state.is_project_dir(), |ui| {

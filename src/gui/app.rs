@@ -28,6 +28,14 @@ pub struct BalloonEditorApp {
     pub export_overlay_drawn: bool,
     /// バックグラウンドスレッドからのプレビュー結果受け取り用
     preview_result: Arc<Mutex<Option<RgbaImage>>>,
+    /// ネイティブのフォルダ選択ダイアログの結果受け取り用。
+    /// rfd を update 内で同期呼び出しするとそのフレームが完結しないため、
+    /// 別スレッドで開いて結果だけを受け取る。
+    pick_folder_result: Arc<Mutex<Option<Option<PathBuf>>>>,
+    /// ネイティブの画像ファイル選択ダイアログの結果受け取り用（同上）
+    pick_files_result: Arc<Mutex<Option<Option<Vec<PathBuf>>>>>,
+    /// ネイティブ選択ダイアログを開いている最中か（この間もグレーアウトを維持する）
+    native_dialog_open: bool,
 }
 
 impl BalloonEditorApp {
@@ -63,6 +71,9 @@ impl BalloonEditorApp {
             pending_export: false,
             export_overlay_drawn: false,
             preview_result: Arc::new(Mutex::new(None)),
+            pick_folder_result: Arc::new(Mutex::new(None)),
+            pick_files_result: Arc::new(Mutex::new(None)),
+            native_dialog_open: false,
         };
 
         // 素材フォルダを初期読み込み（txt が正本のため常にフォルダから読む）
@@ -217,6 +228,33 @@ impl BalloonEditorApp {
 
     pub fn err(&mut self, msg: impl Into<String>) {
         self.dialog = Some(("エラー".into(), msg.into()));
+    }
+
+    /// 汎用確認モーダルで承認されたアクションを実行する
+    fn run_confirm_action(&mut self, action: crate::gui::state::ConfirmAction, ctx: &Context) {
+        use crate::gui::state::ConfirmAction;
+        match action {
+            ConfirmAction::DeleteFilesTxtEntry(stem) => {
+                self.remove_balloon_from_files_txt(&stem);
+                self.state.pending_reload = true;
+            }
+            ConfirmAction::DeletePng(name) => {
+                self.do_delete_png(&name);
+            }
+            ConfirmAction::ExportOverwriteDir(dir) => {
+                self.export_body(dir);
+            }
+            ConfirmAction::ImportOverwrite(src, target_filename) => {
+                match crate::gui::loader::import_image_file_safe(&self.state, &src, &target_filename) {
+                    Ok(_) => {
+                        // 次フレームでインポートウィンドウ側が次の画像へ進む
+                        self.state.import_advance_requested = true;
+                        ctx.request_repaint();
+                    }
+                    Err(e) => { self.err(format!("インポートエラー: {}", e)); }
+                }
+            }
+        }
     }
 
     /// 未保存確認ダイアログ通過後の保留アクションを実行する
@@ -420,8 +458,10 @@ impl BalloonEditorApp {
         self.reload_asset_folder_keep_texts(ctx);
     }
 
-    /// PNG ファイルの削除確認ダイアログを表示して実行する
+    /// PNG ファイルの削除確認モーダルを表示する（実削除は承認後 do_delete_png で行う）
     pub fn request_delete_png(&mut self, name: &str) {
+        use crate::gui::state::{ConfirmAction, ConfirmRequest};
+
         let Some(asset_dir) = self.state.asset_dir() else { return };
         let path = asset_dir.join(name);
         let stem = std::path::Path::new(name)
@@ -437,18 +477,18 @@ impl BalloonEditorApp {
         if !has_file {
             // 物理ファイルなし（files.txt 定義のみのバルーン）
             // files.txt から該当行を削除するか確認する
-            let confirmed = rfd::MessageDialog::new()
-                .set_title("削除確認")
-                .set_description(format!(
-                    "「{}」は画像ファイルを持たず、レイアウト定義（files.txt）のみに存在します。\n\nfiles.txt の定義を削除しますか？",
+            self.state.pending_confirm = Some(ConfirmRequest {
+                title: "削除確認".into(),
+                message: format!(
+                    "「{}」は画像ファイルを持たず、レイアウト定義（files.txt）のみに存在します。
+
+files.txt の定義を削除しますか？",
                     name
-                ))
-                .set_buttons(rfd::MessageButtons::YesNo)
-                .show() == rfd::MessageDialogResult::Yes;
-            if confirmed {
-                self.remove_balloon_from_files_txt(stem);
-                self.state.pending_reload = true;
-            }
+                ),
+                accept_label: "定義を削除".into(),
+                cancel_label: "キャンセル".into(),
+                action: ConfirmAction::DeleteFilesTxtEntry(stem.to_string()),
+            });
             return;
         }
 
@@ -460,37 +500,58 @@ impl BalloonEditorApp {
             format!("「{}」をゴミ箱に移動しますか？", name)
         } else {
             format!(
-                "「{}」をゴミ箱に移動しますか？\n\n以下の付随ファイルも同時に削除されます:\n・{}",
+                "「{}」をゴミ箱に移動しますか？
+
+以下の付随ファイルも同時に削除されます:
+・{}",
                 name,
-                extras.join("\n・")
+                extras.join("
+・")
             )
         };
 
-        let confirmed = rfd::MessageDialog::new()
-            .set_title("削除確認")
-            .set_description(desc)
-            .set_buttons(rfd::MessageButtons::YesNo)
-            .show() == rfd::MessageDialogResult::Yes;
-        if confirmed {
-            if let Err(e) = trash::delete(&path) {
-                self.err(format!("削除に失敗しました:\n{}", e));
-                return;
-            }
-            if has_pna {
-                if let Err(e) = trash::delete(&pna_path) {
-                    self.err(format!("{}.pna の削除に失敗しました:\n{}", stem, e));
-                }
-            }
-            if has_cfg {
-                if let Err(e) = trash::delete(&cfg_path) {
-                    self.err(format!("{}s.txt の削除に失敗しました:\n{}", stem, e));
-                }
-            }
-            // files.txt からも定義行を削除する
-            self.remove_balloon_from_files_txt(stem);
-            // 削除後は next_reload フラグを立てておく（ctx がここでは使えないため）
-            self.state.pending_reload = true;
+        self.state.pending_confirm = Some(ConfirmRequest {
+            title: "削除確認".into(),
+            message: desc,
+            accept_label: "ゴミ箱へ移動".into(),
+            cancel_label: "キャンセル".into(),
+            action: ConfirmAction::DeletePng(name.to_string()),
+        });
+    }
+
+    /// PNG 本体と付随ファイルを実際にゴミ箱へ移動する（確認モーダル承認後に呼ばれる）
+    fn do_delete_png(&mut self, name: &str) {
+        let Some(asset_dir) = self.state.asset_dir() else { return };
+        let path = asset_dir.join(name);
+        let stem = std::path::Path::new(name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(name)
+            .to_string();
+        let pna_path = asset_dir.join(format!("{}.pna", stem));
+        let cfg_path = asset_dir.join(format!("{}s.txt", stem));
+
+        if let Err(e) = trash::delete(&path) {
+            self.err(format!("削除に失敗しました:
+{}", e));
+            return;
         }
+        if pna_path.exists() {
+            if let Err(e) = trash::delete(&pna_path) {
+                self.err(format!("{}.pna の削除に失敗しました:
+{}", stem, e));
+            }
+        }
+        if cfg_path.exists() {
+            if let Err(e) = trash::delete(&cfg_path) {
+                self.err(format!("{}s.txt の削除に失敗しました:
+{}", stem, e));
+            }
+        }
+        // files.txt からも定義行を削除する
+        self.remove_balloon_from_files_txt(&stem);
+        // 削除後は next_reload フラグを立てておく（ctx がここでは使えないため）
+        self.state.pending_reload = true;
     }
 
     /// files.txt（slbe_files_text）から指定 stem のバルーン定義行を削除してディスクに書き出す
@@ -701,6 +762,7 @@ impl BalloonEditorApp {
     /// 出力処理
     pub fn export(&mut self) {
         use crate::core::descript::parse_descript;
+        use crate::gui::state::{ConfirmAction, ConfirmRequest};
 
         let Some(_ad) = self.state.asset_dir() else {
             self.err("素材フォルダが選択されていません。\n\nメニュー「ファイル > 素材フォルダを選択...」から素材フォルダを指定してください。".to_string());
@@ -736,21 +798,39 @@ impl BalloonEditorApp {
             .to_string();
         let output_dir = self.root.join("output").join(&dir_name);
 
-        // 出力先が既に存在する場合は確認してから削除
+        // 出力先が既に存在する場合はモーダルで確認してから削除する
+        // （承認後 ConfirmAction::ExportOverwriteDir → export_body へ進む）
         if output_dir.exists() {
-            let confirmed = rfd::MessageDialog::new()
-                .set_title("確認")
-                .set_description(format!(
-                    "出力先フォルダが既に存在します。\n削除して再作成しますか？\n\n{}",
+            self.state.pending_confirm = Some(ConfirmRequest {
+                title: "出力先の確認".into(),
+                message: format!(
+                    "出力先フォルダが既に存在します。
+削除して再作成しますか？
+
+{}",
                     output_dir.display()
-                ))
-                .set_buttons(rfd::MessageButtons::YesNo)
-                .show() == rfd::MessageDialogResult::Yes;
-            if !confirmed {
-                return;
-            }
+                ),
+                accept_label: "削除して出力".into(),
+                cancel_label: "キャンセル".into(),
+                action: ConfirmAction::ExportOverwriteDir(output_dir.clone()),
+            });
+            return;
+        }
+
+        self.export_body(output_dir);
+    }
+
+    /// 出力処理の本体（出力先フォルダの確認が済んだ後に呼ばれる）
+    fn export_body(&mut self, output_dir: std::path::PathBuf) {
+        let Some(ad) = self.state.asset_dir() else {
+            self.err("素材フォルダが選択されていません。".to_string());
+            return;
+        };
+
+        if output_dir.exists() {
             if let Err(e) = std::fs::remove_dir_all(&output_dir) {
-                self.err(format!("出力フォルダの削除に失敗しました:\n{}", e));
+                self.err(format!("出力フォルダの削除に失敗しました:
+{}", e));
                 return;
             }
         }
@@ -760,7 +840,6 @@ impl BalloonEditorApp {
         }
 
         // バルーン画像を出力（個別色を考慮して全件合成）
-        let ad = self.state.asset_dir().unwrap();
         let balloon_images = match build_all_balloons_for_export(&self.state, &ad) {
             Ok(imgs) => imgs,
             Err(e) => {
@@ -1120,6 +1199,65 @@ impl eframe::App for BalloonEditorApp {
             }
         }
 
+        // ネイティブのファイル選択ダイアログは別スレッドで開く。
+        // update 内で rfd を同期呼び出しすると、ダイアログがイベントループを
+        // 占有してそのフレームが完結せず、描画（バックドロップ等）が失われるため。
+        if self.state.request_pick_import_folder {
+            self.state.request_pick_import_folder = false;
+            self.native_dialog_open = true;
+            let slot = Arc::clone(&self.pick_folder_result);
+            let ctx2 = ctx.clone();
+            std::thread::spawn(move || {
+                let picked = rfd::FileDialog::new()
+                    .set_title("取り込む素材フォルダを選択")
+                    .pick_folder();
+                *slot.lock().unwrap() = Some(picked);
+                ctx2.request_repaint();
+            });
+        }
+        if self.state.request_pick_import_images {
+            self.state.request_pick_import_images = false;
+            self.native_dialog_open = true;
+            let slot = Arc::clone(&self.pick_files_result);
+            let ctx2 = ctx.clone();
+            std::thread::spawn(move || {
+                let picked = rfd::FileDialog::new()
+                    .set_title("インポートする画像を選択")
+                    .add_filter("PNG画像", &["png"])
+                    .pick_files();
+                *slot.lock().unwrap() = Some(picked);
+                ctx2.request_repaint();
+            });
+        }
+
+        // 選択ダイアログの結果を受け取る
+        let folder_picked = self.pick_folder_result.lock().unwrap().take();
+        if let Some(picked) = folder_picked {
+            self.native_dialog_open = false;
+            if let Some(src) = picked {
+                let folder_name = src.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                self.state.import_folder_src = src;
+                self.state.import_folder_project_name = folder_name;
+                self.state.import_folder_warning = String::new();
+                self.state.show_import_folder_window = true;
+            }
+        }
+        let files_picked = self.pick_files_result.lock().unwrap().take();
+        if let Some(picked) = files_picked {
+            self.native_dialog_open = false;
+            if let Some(files) = picked {
+                if !files.is_empty() {
+                    self.state.import_queue = files;
+                    self.state.import_queue_index = 0;
+                    self.state.show_import_window = true;
+                    self.preset_import_from_current_queue(ctx);
+                }
+            }
+        }
+
         // 削除後などの遅延リロード
         if self.state.pending_reload {
             self.state.pending_reload = false;
@@ -1174,6 +1312,8 @@ impl eframe::App for BalloonEditorApp {
             egui::Window::new(title)
                 .collapsible(false)
                 .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .order(egui::Order::Tooltip)
                 .show(ctx, |ui| {
                     ui.label(&msg);
                     if ui.button("OK").clicked() {
@@ -1187,6 +1327,8 @@ impl eframe::App for BalloonEditorApp {
             egui::Window::new("出力完了")
                 .collapsible(false)
                 .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .order(egui::Order::Tooltip)
                 .show(ctx, |ui| {
                     ui.label(format!("出力が完了しました。\n\n出力先:\n{}", out_dir.display()));
                     ui.add_space(6.0);
@@ -1209,8 +1351,10 @@ impl eframe::App for BalloonEditorApp {
             let mut open_name: Option<String> = None;
 
             egui::Window::new("プロジェクトを開く")
+                .order(egui::Order::Tooltip)
                 .collapsible(false)
                 .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .fixed_size([300.0, 310.0])
                 .show(ctx, |ui| {
                     if self.state.open_project_list.is_empty() {
@@ -1312,6 +1456,7 @@ impl eframe::App for BalloonEditorApp {
             egui::Window::new("未保存の変更")
                 .collapsible(false)
                 .resizable(false)
+                .order(egui::Order::Tooltip)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ctx, |ui| {
                     ui.label(message);
@@ -1353,6 +1498,8 @@ impl eframe::App for BalloonEditorApp {
             egui::Window::new("新規プロジェクト作成")
                 .collapsible(false)
                 .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .order(egui::Order::Tooltip)
                 .show(ctx, |ui| {
                     ui.label("新規プロジェクトの名前を入力してください。\n(プロジェクトフォルダが projects/ 配下に作成されます)");
                     ui.add_space(4.0);
@@ -1423,8 +1570,10 @@ impl eframe::App for BalloonEditorApp {
             let src_name = src.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
 
             egui::Window::new("フォルダからプロジェクトを作成")
+                .order(egui::Order::Tooltip)
                 .collapsible(false)
                 .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .fixed_size([380.0, 180.0])
                 .show(ctx, |ui| {
                     ui.label(format!("取り込み元: {}", src_name));
@@ -1535,6 +1684,8 @@ impl eframe::App for BalloonEditorApp {
                 .collapsible(false)
                 .resizable(false)
                 .fixed_size([380.0, 160.0])
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .order(egui::Order::Tooltip)
                 .show(ctx, |ui| {
                     ui.label(format!("現在のプロジェクト: {}", current_name));
                     ui.add_space(6.0);
@@ -1617,6 +1768,8 @@ impl eframe::App for BalloonEditorApp {
                     .collapsible(false)
                     .resizable(false)
                     .fixed_size([300.0, 180.0])
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .order(egui::Order::Tooltip)
                     .show(ctx, |ui| {
                         ui.label(format!("変更前: {}", old_stem));
                         ui.add_space(6.0);
@@ -1691,6 +1844,8 @@ impl eframe::App for BalloonEditorApp {
                     .collapsible(false)
                     .resizable(false)
                     .fixed_size([340.0, 150.0])
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .order(egui::Order::Tooltip)
                     .show(ctx, |ui| {
                         ui.label(format!("変更前: {}", old_stem));
                         ui.add_space(4.0);
@@ -1762,6 +1917,8 @@ impl eframe::App for BalloonEditorApp {
                     .collapsible(false)
                     .resizable(false)
                     .fixed_size([740.0, 360.0])
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .order(egui::Order::Tooltip)
                     .show(ctx, |ui| {
                         ui.colored_label(egui::Color32::from_rgb(29, 106, 184), format!("インポート画像 ({} / {} 枚目):", idx + 1, self.state.import_queue.len()));
                         ui.label(format!("ファイル名: {}", filename));
@@ -1957,17 +2114,20 @@ impl eframe::App for BalloonEditorApp {
                                         }
                                     }
 
-                                    let proceed = if exists {
-                                        rfd::MessageDialog::new()
-                                            .set_title("上書き確認")
-                                            .set_description(format!("ファイル「{}」は既に存在します。上書きしますか？", target_filename))
-                                            .set_buttons(rfd::MessageButtons::YesNo)
-                                            .show() == rfd::MessageDialogResult::Yes
+                                    if exists {
+                                        // 上書きになる場合は確認モーダルを重ねて表示し、
+                                        // 承認後に ConfirmAction::ImportOverwrite で実行する
+                                        self.state.pending_confirm = Some(crate::gui::state::ConfirmRequest {
+                                            title: "上書き確認".into(),
+                                            message: format!("ファイル「{}」は既に存在します。上書きしますか？", target_filename),
+                                            accept_label: "上書きしてインポート".into(),
+                                            cancel_label: "キャンセル".into(),
+                                            action: crate::gui::state::ConfirmAction::ImportOverwrite(
+                                                path.clone(),
+                                                target_filename.clone(),
+                                            ),
+                                        });
                                     } else {
-                                        true
-                                    };
-
-                                    if proceed {
                                         match crate::gui::loader::import_image_file_safe(&self.state, &path, &target_filename) {
                                             Ok(_) => {
                                                 next = true;
@@ -1987,6 +2147,12 @@ impl eframe::App for BalloonEditorApp {
                             }
                         });
                     });
+
+                // 確認モーダル経由でインポートが完了していた場合も次へ進める
+                if self.state.import_advance_requested {
+                    self.state.import_advance_requested = false;
+                    next = true;
+                }
 
                 if next {
                     self.state.import_queue_index += 1;
@@ -2096,6 +2262,67 @@ impl eframe::App for BalloonEditorApp {
 
         // files.txt エディタウィンドウ
         panels::files_editor::show(self, ctx);
+
+        // モーダルダイアログ表示中は背後をグレーアウトし、入力も遮断する。
+        //
+        // ここ（全ウィンドウ描画後）で判定するのは、ネイティブのファイル選択ダイアログ
+        // （rfd）経由で開くウィンドウがメニュー描画中にフラグを立てるため。
+        // フレーム冒頭で判定するとそのフレームだけ塗りが欠ける。
+        //
+        // 重なり順: Foreground（このバックドロップ）
+        //         < Tooltip（各モーダル本体・確認用バックドロップ）
+        //         < Debug（確認モーダル本体）
+        let modal_active = self.dialog.is_some()
+            || self.export_done_dir.is_some()
+            || self.state.pending_unsaved_action.is_some()
+            || self.state.pending_confirm.is_some()
+            || self.state.show_open_project_window
+            || self.state.show_new_project_window
+            || self.state.show_import_folder_window
+            || self.state.show_rename_window
+            || self.state.show_save_as_project_window
+            || self.state.show_import_window
+            // ネイティブ選択ダイアログを開いている間もグレーアウトを維持する
+            || self.native_dialog_open;
+        if modal_active {
+            draw_modal_backdrop(ctx, "modal_input_blocker", egui::Order::Foreground);
+        }
+
+        // 汎用確認モーダル（削除・上書き等の「実行/キャンセル」確認）
+        // 他のウィンドウ（インポートウィンドウ等）の上に重ねるため最後に描画する
+        if let Some(req) = self.state.pending_confirm.clone() {
+            #[derive(PartialEq)]
+            enum Choice { None, Accept, Cancel }
+            let mut choice = Choice::None;
+
+            // 確認モーダル専用のバックドロップ（他モーダルの上にもう一段重ねる）
+            draw_modal_backdrop(ctx, "confirm_input_blocker", egui::Order::Tooltip);
+
+            egui::Window::new(&req.title)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .order(egui::Order::Debug)
+                .show(ctx, |ui| {
+                    ui.label(&req.message);
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button(&req.accept_label).clicked() { choice = Choice::Accept; }
+                        if ui.button(&req.cancel_label).clicked() { choice = Choice::Cancel; }
+                    });
+                });
+
+            match choice {
+                Choice::Accept => {
+                    self.state.pending_confirm = None;
+                    self.run_confirm_action(req.action, ctx);
+                }
+                Choice::Cancel => {
+                    self.state.pending_confirm = None;
+                }
+                Choice::None => {}
+            }
+        }
 
         // 出力中オーバーレイ: pending_export が立っている間、画面中央に「出力中…」を表示する。
         // 描画した最初のフレームで export_overlay_drawn を立て、次フレームで実出力を行う
@@ -2277,6 +2504,32 @@ pub fn apply_theme(ctx: &egui::Context, theme: crate::gui::state::ThemeMode) {
     } else {
         ctx.set_visuals(egui::Visuals::light());
     }
+}
+
+/// モーダル表示中の背景バックドロップを描く。
+///
+/// 画面全体を半透明の黒で覆って背後をグレーアウトしつつ、
+/// 同じ領域を占める Area で背後のウィンドウへの入力を遮断する。
+/// `order` より後（手前）に描画されたウィンドウのみが操作可能になる。
+pub fn draw_modal_backdrop(ctx: &egui::Context, id: &str, order: egui::Order) {
+    let screen = ctx.screen_rect();
+
+    egui::Area::new(egui::Id::new(id))
+        .order(order)
+        .fixed_pos(screen.min)
+        .interactable(true)
+        .show(ctx, |ui| {
+            // クリップ矩形を画面全体に広げてから塗る
+            // （既定では確保済み領域にクリップされ、塗りが欠ける）
+            ui.set_clip_rect(screen);
+            ui.painter().rect_filled(
+                screen,
+                0.0,
+                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 100),
+            );
+            // クリック・ドラッグを吸収して背後への入力を遮断する
+            ui.allocate_response(screen.size(), egui::Sense::click_and_drag());
+        });
 }
 
 /// 同梱フォント（BIZ UDPGothic）を egui に設定する

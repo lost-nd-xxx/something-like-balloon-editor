@@ -86,6 +86,34 @@ pub enum DragEditTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RectEdge { Top, Bottom, Left, Right }
 
+/// 汎用確認モーダル（はい/いいえ相当）で承認された場合に実行するアクション
+#[derive(Debug, Clone)]
+pub enum ConfirmAction {
+    /// files.txt の定義行のみを削除する（stem）
+    DeleteFilesTxtEntry(String),
+    /// PNG 本体と付随ファイル（.pna / 個別設定 txt）をゴミ箱へ移動する（ファイル名）
+    DeletePng(String),
+    /// 既存の出力先フォルダを削除して出力処理を継続する（出力先パス）
+    ExportOverwriteDir(std::path::PathBuf),
+    /// インポート先に同名ファイルがある状態で上書きインポートする（インポート元パス, 保存ファイル名）
+    ImportOverwrite(std::path::PathBuf, String),
+}
+
+/// 汎用確認モーダルの表示要求
+#[derive(Debug, Clone)]
+pub struct ConfirmRequest {
+    /// ウィンドウタイトル
+    pub title: String,
+    /// 本文
+    pub message: String,
+    /// 実行ボタンのラベル（場面ごとの動詞）
+    pub accept_label: String,
+    /// 取り消しボタンのラベル
+    pub cancel_label: String,
+    /// 承認時に実行するアクション
+    pub action: ConfirmAction,
+}
+
 /// 未保存確認ダイアログを経由して実行する保留アクション
 #[derive(Debug, Clone)]
 pub enum PendingAction {
@@ -204,6 +232,16 @@ pub struct AppState {
     pub dirty: bool,
     /// 未保存確認ダイアログ後に実行する保留アクション
     pub pending_unsaved_action: Option<PendingAction>,
+    /// 汎用確認モーダルの表示要求（Some の間モーダルを表示する）
+    pub pending_confirm: Option<ConfirmRequest>,
+    /// 確認モーダル経由でインポートを実行した後、次の画像へ進む要求
+    pub import_advance_requested: bool,
+    /// ネイティブのフォルダ選択ダイアログを開く要求。
+    /// update 内で rfd を同期呼び出しするとダイアログがイベントループを占有し
+    /// そのフレームが完結しないため、フラグを立てて別スレッドで開く。
+    pub request_pick_import_folder: bool,
+    /// ネイティブの画像ファイル選択ダイアログを開く要求（同上）
+    pub request_pick_import_images: bool,
     /// 終了確認を通過して実際にウィンドウを閉じてよいか
     pub allow_close: bool,
 
@@ -346,6 +384,10 @@ impl AppState {
             new_project_warning: String::new(),
             dirty: false,
             pending_unsaved_action: None,
+            pending_confirm: None,
+            import_advance_requested: false,
+            request_pick_import_folder: false,
+            request_pick_import_images: false,
             allow_close: false,
 
             // --- プロジェクトを開くUI ---

@@ -595,10 +595,17 @@ pub fn show(app: &mut BalloonEditorApp, ctx: &Context) {
             }
 
             if confirm_open {
+                // このビューポート内の背後（エディタ本体）をグレーアウトし入力も遮断する
+                crate::gui::app::draw_modal_backdrop(
+                    vp_ctx,
+                    "files_editor_modal_blocker",
+                    egui::Order::Foreground,
+                );
                 egui::Window::new("未適用の変更があります")
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .order(egui::Order::Tooltip)
                     .show(vp_ctx, |ui| {
                         ui.label("変更が適用されていません。どうしますか？");
                         ui.add_space(8.0);
