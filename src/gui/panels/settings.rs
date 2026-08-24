@@ -339,7 +339,19 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                             } else {
                                 true
                             };
-                            ui.label(field.label);
+                            // 縦書き時、arrow0/arrow1 は右/左スクロールの意味になる（UKADOC）
+                            let label = if is_vertical_effective(app, &cfg_key) {
+                                match field.key {
+                                    "arrow0.x" => "矢印(右) X",
+                                    "arrow0.y" => "矢印(右) Y",
+                                    "arrow1.x" => "矢印(左) X",
+                                    "arrow1.y" => "矢印(左) Y",
+                                    _ => field.label,
+                                }
+                            } else {
+                                field.label
+                            };
+                            ui.label(label);
                             ui.add_enabled_ui(enabled, |ui| {
                                 show_field_widget(ui, app, ctx, field, &cfg_key, use_individual);
                             });
@@ -349,6 +361,15 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
 
             });
     }
+}
+
+/// 縦書き（vertical,1）が有効か（個別設定 → 共通設定の順で解決）
+fn is_vertical_effective(app: &BalloonEditorApp, cfg_key: &str) -> bool {
+    app.state.individual_texts.get(cfg_key)
+        .and_then(|t| parse_descript(t).get("vertical").cloned())
+        .or_else(|| parse_descript(&app.state.descript_text).get("vertical").cloned())
+        .map(|v| v.trim() == "1")
+        .unwrap_or(false)
 }
 
 /// 個別設定→共通設定→dynamic_defaults→field.default の優先順でキーの値を解決する。
@@ -783,20 +804,22 @@ fn show_drag_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &egui::C
             let area_target = if is_c { DragEditTarget::CommunicateBox } else { DragEditTarget::ValidRect };
             all_entries.push((area_label, area_target));
             if !is_c {
-                // 縦書き時は折り返しが wordwrappoint.y になる（個別設定 → 共通設定の順で判定）
+                // 縦書き時は折り返しが wordwrappoint.y になり、
+                // arrow0/arrow1 は右/左スクロールの意味になる（UKADOC）
                 let cfg_key = format!("{}s.txt", sel.trim_end_matches(".png"));
-                let vertical = app.state.individual_texts.get(&cfg_key)
-                    .and_then(|t| parse_descript(t).get("vertical").cloned())
-                    .or_else(|| parse_descript(&app.state.descript_text).get("vertical").cloned())
-                    .map(|v| v.trim() == "1")
-                    .unwrap_or(false);
+                let vertical = is_vertical_effective(app, &cfg_key);
                 if vertical {
                     all_entries.push(("折り返し Y", DragEditTarget::WordWrapY));
                 } else {
                     all_entries.push(("折り返し X", DragEditTarget::WordWrap));
                 }
-                if parts.contains_key("arrow0.png")    { all_entries.push(("矢印(上)",     DragEditTarget::Arrow0));       }
-                if parts.contains_key("arrow1.png")    { all_entries.push(("矢印(下)",     DragEditTarget::Arrow1));       }
+                let (arrow0_label, arrow1_label) = if vertical {
+                    ("矢印(右)", "矢印(左)")
+                } else {
+                    ("矢印(上)", "矢印(下)")
+                };
+                if parts.contains_key("arrow0.png")    { all_entries.push((arrow0_label,   DragEditTarget::Arrow0));       }
+                if parts.contains_key("arrow1.png")    { all_entries.push((arrow1_label,   DragEditTarget::Arrow1));       }
                 if parts.contains_key("clickwait.png") { all_entries.push(("クリック待ち",   DragEditTarget::ClickWait));    }
                 if has_sstp                             { all_entries.push(("SSTPマーカー",   DragEditTarget::SstpMarker));   }
                 if has_sstp                             { all_entries.push(("SSTPメッセージ", DragEditTarget::SstpMessage));  }
