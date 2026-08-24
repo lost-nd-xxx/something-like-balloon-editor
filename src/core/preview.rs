@@ -26,7 +26,7 @@ impl Sess {
         #[cfg(windows)]
         {
             let gdi_name = font_name.split(',').next().unwrap_or(font_name).trim();
-            Self { inner: GdiSession::new(gdi_name, size_px, no_aa), font_name: font_name.to_string(), size_px, no_aa }
+            Self { inner: GdiSession::new(gdi_name, size_px, no_aa, false), font_name: font_name.to_string(), size_px, no_aa }
         }
         #[cfg(not(windows))]
         {
@@ -51,7 +51,7 @@ impl Sess {
         #[cfg(windows)]
         if let Some(sess) = &mut self.inner {
             let clipped = match max_x {
-                Some(mx) => sess.clip_to_max_x(text, px, mx),
+                Some(mx) => sess.clip_to_max(text, px, mx),
                 None => text.to_string(),
             };
             let text = clipped.as_str();
@@ -417,7 +417,7 @@ fn draw_text_on(
     }
     // フォールバック: GDI 単発 → fontdue
     let gdi_font_name = font_name.split(',').next().unwrap_or(font_name).trim();
-    if gdi_text::draw_text_gdi(img, gdi_font_name, text, px, py, size_px, color, shadow, max_x, no_aa) {
+    if gdi_text::draw_text_gdi(img, gdi_font_name, text, px, py, size_px, color, shadow, max_x, no_aa, false) {
         return;
     }
     let Some(font) = font else { return; };
@@ -481,7 +481,7 @@ fn draw_text_fontdue(
 fn measure_text(font_name: &str, font: Option<&fontdue::Font>, text: &str, size_px: f32, no_aa: bool, sess: &Sess) -> f32 {
     if let Some(w) = sess.measure_with_size(text, size_px) { return w; }
     let gdi_font_name = font_name.split(',').next().unwrap_or(font_name).trim();
-    if let Some(w) = gdi_text::measure_text_gdi(gdi_font_name, text, size_px, no_aa) {
+    if let Some(w) = gdi_text::measure_text_gdi(gdi_font_name, text, size_px, no_aa, false) {
         return w;
     }
     if let Some(f) = font {
