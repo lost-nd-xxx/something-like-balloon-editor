@@ -21,7 +21,10 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
         show_basic_info_section(ui, app);
         });
         ui.separator();
-        // PNG一覧プレビュー中はバルーン設定・位置編集をグレーアウト＆非表示
+        // PNG一覧プレビュー中はバルーン設定・位置編集の代わりに画像編集を表示
+        if png_preview && !no_project {
+            show_png_edit_section(ui, app, ctx);
+        }
         ui.add_enabled_ui(!png_preview && !no_project, |ui| {
             if !png_preview {
                 egui::CollapsingHeader::new("バルーン設定詳細")
@@ -34,6 +37,42 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
             }
         });
     });
+}
+
+/// 単体プレビュー中の画像編集セクション（回転/反転）
+fn show_png_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
+    use crate::core::composer::ImageTransform;
+
+    egui::CollapsingHeader::new("画像編集")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("操作するとファイルが直接書き換わります（元に戻すには逆の操作）")
+                    .color(ui.visuals().text_color())
+                    .small(),
+            );
+            ui.add_space(4.0);
+
+            let ops: &[(&str, ImageTransform)] = &[
+                ("左90°回転",  ImageTransform::RotateLeft),
+                ("右90°回転",  ImageTransform::RotateRight),
+                ("180°回転",   ImageTransform::Rotate180),
+                ("左右反転",   ImageTransform::FlipH),
+                ("上下反転",   ImageTransform::FlipV),
+            ];
+            let mut clicked: Option<ImageTransform> = None;
+            ui.horizontal_wrapped(|ui| {
+                for (label, op) in ops {
+                    if ui.button(*label).clicked() {
+                        clicked = Some(*op);
+                    }
+                }
+            });
+            if let Some(op) = clicked {
+                app.transform_preview_png(op, ctx);
+            }
+        });
+    ui.separator();
 }
 
 fn show_basic_info_section(ui: &mut Ui, app: &mut BalloonEditorApp) {
