@@ -707,7 +707,14 @@ fn draw_parts(
     let sstp_no_aa = is_bitmap_font(&sstp_font_name);
     let sstp_leading = gdi_text::font_internal_leading(
         sstp_font_name.split(',').next().unwrap_or(&sstp_font_name).trim(), sstp_fh, sstp_no_aa);
-    draw_text_on(img, &sstp_font_name, font, "SSTPメッセージ", ssx, ssy - sstp_leading / 2, sstp_fh, sstp_col, None, None, sstp_no_aa, sess);
+    // 縦書き時は SSTP 送信元表示も縦書きになる（UKADOC vertical の項）。
+    // SSP 実動作: 指定座標を基準点として下方向に描画される（座標 = 列右端・先頭上端）
+    let vertical = parsed.get("vertical").map(|s| s.trim() == "1").unwrap_or(false);
+    if vertical {
+        draw_text_on_vertical(img, &sstp_font_name, font, "SSTPメッセージ", ssx, ssy, sstp_fh, sstp_col, None, None, sstp_no_aa, sess);
+    } else {
+        draw_text_on(img, &sstp_font_name, font, "SSTPメッセージ", ssx, ssy - sstp_leading / 2, sstp_fh, sstp_col, None, None, sstp_no_aa, sess);
+    }
 
     // カウンタ数値
     let num_xr: i32 = parsed.get("number.xr").and_then(|s| s.parse().ok()).unwrap_or(-20);
@@ -722,10 +729,17 @@ fn draw_parts(
     };
     let num_no_aa = is_bitmap_font(&num_font_name);
     let tw = measure_text(&num_font_name, font, "999", num_fh, num_no_aa, sess);
-    let num_x = iw + num_xr - tw as i32;
-    let num_leading = gdi_text::font_internal_leading(
-        num_font_name.split(',').next().unwrap_or(&num_font_name).trim(), num_fh, num_no_aa);
-    draw_text_on(img, &num_font_name, font, "999", num_x, num_y - num_leading / 2, num_fh, num_col, None, None, num_no_aa, sess);
+    if vertical {
+        // SSP 実動作: 指定座標と文字列末端が一致するように描画される
+        // （横書きの右端一致と同型。縦書きでは下端 = number.y、列右端 = iw + number.xr）
+        let num_top = num_y - tw as i32;
+        draw_text_on_vertical(img, &num_font_name, font, "999", iw + num_xr, num_top, num_fh, num_col, None, None, num_no_aa, sess);
+    } else {
+        let num_x = iw + num_xr - tw as i32;
+        let num_leading = gdi_text::font_internal_leading(
+            num_font_name.split(',').next().unwrap_or(&num_font_name).trim(), num_fh, num_no_aa);
+        draw_text_on(img, &num_font_name, font, "999", num_x, num_y - num_leading / 2, num_fh, num_col, None, None, num_no_aa, sess);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1526,4 +1540,5 @@ fn draw_cross(img: &mut RgbaImage, cx: i32, cy: i32, outer: Rgb, inner: Rgb) {
     draw_hline(img, cx-s, cy, cx+s+1, inner, 255);
     draw_vline(img, cx, cy-s, cy+s, inner, 255);
 }
+
 
