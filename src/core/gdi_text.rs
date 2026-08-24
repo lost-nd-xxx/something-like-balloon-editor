@@ -127,9 +127,10 @@ impl GdiSession {
     /// 送り方向の上限座標 max に収まる文字数まで切り詰める。
     /// start は送り方向の開始座標（横書き=X、縦書き=Y）。計測は measure と同様に
     /// ベースライン方向のため、縦書きセッションでもそのまま使える。
+    /// 文字の開始位置がちょうど max 上にある場合は描画対象に含める（SSP準拠）。
     pub fn clip_to_max(&self, text: &str, start: i32, max: i32) -> String {
-        let budget = (max - start).max(0) as i32;
-        if text.is_empty() || budget <= 0 { return String::new(); }
+        let budget = max - start;
+        if text.is_empty() || budget < 0 { return String::new(); }
         unsafe {
             let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
             let n = wide.len() - 1;
@@ -147,7 +148,8 @@ impl GdiSession {
             let mut fit_cu = 0usize;
             for i in 0..n {
                 let start = if i == 0 { 0 } else { extents[i - 1] };
-                if start >= budget { break; }
+                // 開始位置がラインを超えた文字から打ち切る（ライン上ちょうどは描画する）
+                if start > budget { break; }
                 fit_cu = i + 1;
             }
             String::from_utf16_lossy(&wide[..fit_cu]).to_string()
