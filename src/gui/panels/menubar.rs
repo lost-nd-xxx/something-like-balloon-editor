@@ -220,7 +220,7 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                     let swatch = egui::Color32::from_rgb(sr, sg, sb);
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
                     ui.painter().rect_filled(rect, 2.0, swatch);
-                    ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.fg_stroke.color));
+                    ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.fg_stroke.color));
                     if ui.interact(rect, ui.id().with("bg_swatch"), egui::Sense::click()).clicked() {
                         app.state.canvas_bg = crate::gui::state::CanvasBg::Solid(sr, sg, sb);
                         app.state.show_bg_color_window = true;

@@ -315,7 +315,7 @@ fn draw_editor_ui(
                         let frame = if is_dup {
                             egui::Frame::group(ui.style())
                                 .fill(egui::Color32::from_rgba_unmultiplied(180, 60, 60, 40))
-                                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 80, 80)))
+                                .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(180, 80, 80)))
                         } else {
                             egui::Frame::group(ui.style())
                         };

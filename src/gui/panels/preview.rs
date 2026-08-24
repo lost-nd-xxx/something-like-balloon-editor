@@ -733,10 +733,10 @@ fn draw_drag_overlay(
     let col_active  = egui::Color32::from_rgba_unmultiplied(255, 80,  80, 230);
     let col_passive = egui::Color32::from_rgba_unmultiplied(255, 220, 0, 110);
 
-    let stroke_out     = egui::Stroke::new(3.5, col_outline);
-    let stroke_active  = egui::Stroke::new(2.0, col_active);
-    let stroke_passive = egui::Stroke::new(1.5, col_passive);
-    let stroke_line    = egui::Stroke::new(1.5, col_line);
+    let stroke_out     = egui::Stroke::new(3.5_f32, col_outline);
+    let stroke_active  = egui::Stroke::new(2.0_f32, col_active);
+    let stroke_passive = egui::Stroke::new(1.5_f32, col_passive);
+    let stroke_line    = egui::Stroke::new(1.5_f32, col_line);
 
     let draw_hline_s = |painter: &egui::Painter, y: f32, s: egui::Stroke| {
         let l = egui::pos2(origin.x, y);
