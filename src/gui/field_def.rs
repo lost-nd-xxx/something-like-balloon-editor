@@ -6,6 +6,7 @@ pub enum FieldType {
     Text,      // テキスト
     Int,       // 整数（Spinbox）
     Dropdown,  // ドロップダウン選択
+    Bool,      // チェックボックス（"0"/"1"）
 }
 
 #[derive(Debug, Clone)]
@@ -103,6 +104,10 @@ macro_rules! fd {
         FieldDef { key: $key, label: $label, field_type: $ft, choices: $choices, default: $default }
     };
 }
+
+/// 縦書き設定（バルーン全体のテキスト方向）。アコーディオン外に独立配置する
+pub static VERTICAL_FIELD: FieldDef =
+    fd!("vertical", "縦書き", FieldType::Bool, &[], "0");
 
 pub static ACCORDION_GROUPS: &[AccordionGroup] = &[
     AccordionGroup {
@@ -212,6 +217,7 @@ pub static ACCORDION_GROUPS: &[AccordionGroup] = &[
             fd!("validrect.right",   "テキスト域 右",    FieldType::Int, &[], "-10"),
             fd!("validrect.bottom",  "テキスト域 下",    FieldType::Int, &[], "-10"),
             fd!("wordwrappoint.x",   "折り返しX",        FieldType::Int, &[], "-20"),
+            fd!("wordwrappoint.y",   "折り返しY",        FieldType::Int, &[], "-20"),
             fd!("arrow0.x",          "矢印(上) X",       FieldType::Int, &[], "-5"),
             fd!("arrow0.y",          "矢印(上) Y",       FieldType::Int, &[], "5"),
             fd!("arrow1.x",          "矢印(下) X",       FieldType::Int, &[], "-5"),

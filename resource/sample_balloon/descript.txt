@@ -54,6 +54,14 @@ wordwrappoint.x,-48
 // 自動改行で折り返すX座標
 // 数値がマイナスの場合、右下から数えた座標となる
 
+wordwrappoint.y,-20
+// 縦書きが有効の時、自動改行をするY座標
+// 数値がマイナスの場合、下から数えた座標となる
+
+vertical,0
+// 1を指定すると、このバルーンのテキストを日本語縦書きで表示する。
+// 詳しくは: https://ssp.shillest.net/ukadoc/manual/descript_balloon.html#vertical,0/1
+
 // ------------------------------------------------
 
 font.name,BIZ UDGothic,ＭＳ ゴシック

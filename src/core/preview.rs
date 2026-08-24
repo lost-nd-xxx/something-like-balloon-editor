@@ -1218,20 +1218,36 @@ fn draw_overlay(
         for (cx, cy) in [(l, t), (r, t), (l, b), (r, b)] {
             draw_cross(img, cx, cy, white, red);
         }
-        let wwx_raw = parsed.get("wordwrappoint.x").map(|s| s.as_str()).unwrap_or("-0");
-        let wwx = pos_str(wwx_raw, iw);
-        if wwx > vr.right {
-            draw_vline_dashed(img, wwx, t, b, Rgb(180,180,180), Rgb(100,100,100));
+        let vertical = parsed.get("vertical").map(|s| s.trim() == "1").unwrap_or(false);
+        if vertical {
+            // 縦書き時は wordwrappoint.x が無視されるため、wordwrappoint.y の横線のみ表示
+            // 未指定時の既定は validrect.bottom（SSP仕様）
+            let wwy = match parsed.get("wordwrappoint.y") {
+                Some(s) => pos_str(s, ih),
+                None => vr.bottom,
+            };
+            if wwy > vr.bottom {
+                draw_hline_dashed(img, wwy, l, r, Rgb(180,180,180), Rgb(100,100,100));
+            } else {
+                draw_overlay_hline(img, wwy, l, r, white, red);
+            }
         } else {
-            draw_overlay_vline(img, wwx, t, b, white, red);
+            let wwx_raw = parsed.get("wordwrappoint.x").map(|s| s.as_str()).unwrap_or("-0");
+            let wwx = pos_str(wwx_raw, iw);
+            if wwx > vr.right {
+                draw_vline_dashed(img, wwx, t, b, Rgb(180,180,180), Rgb(100,100,100));
+            } else {
+                draw_overlay_vline(img, wwx, t, b, white, red);
+            }
         }
 
         // origin.x/y が 0 以外のとき、テキスト実開始点を緑の十字で表示
+        // 縦書き時の origin.x は「1列目の右端」＝ validrect.right 基準
         let origin_x: i32 = parsed.get("origin.x").and_then(|s| s.parse().ok()).unwrap_or(0);
         let origin_y: i32 = parsed.get("origin.y").and_then(|s| s.parse().ok()).unwrap_or(0);
         if origin_x != 0 || origin_y != 0 {
-            let tx = vr.left + origin_x;
-            let ty = vr.top  + origin_y;
+            let tx = if vertical { vr.right + origin_x } else { vr.left + origin_x };
+            let ty = vr.top + origin_y;
             draw_cross(img, tx, ty, Rgb(0, 200, 0), Rgb(0, 200, 0));
         }
     }
@@ -1325,6 +1341,16 @@ fn draw_overlay_vline(img: &mut RgbaImage, x: i32, y0: i32, y1: i32, outer: Rgb,
 fn draw_vline_dashed(img: &mut RgbaImage, x: i32, y0: i32, y1: i32, outer: Rgb, inner: Rgb) {
     for dx in -1..=1i32 { draw_vline(img, x+dx, y0, y1, outer, 200); }
     draw_dashed_vline(img, x, y0, y1, inner);
+}
+
+fn draw_overlay_hline(img: &mut RgbaImage, y: i32, x0: i32, x1: i32, outer: Rgb, inner: Rgb) {
+    for dy in -1..=1i32 { draw_hline(img, x0, y+dy, x1 + 1, outer, 255); }
+    draw_dashed_hline(img, x0, y, x1, inner);
+}
+
+fn draw_hline_dashed(img: &mut RgbaImage, y: i32, x0: i32, x1: i32, outer: Rgb, inner: Rgb) {
+    for dy in -1..=1i32 { draw_hline(img, x0, y+dy, x1 + 1, outer, 200); }
+    draw_dashed_hline(img, x0, y, x1, inner);
 }
 
 fn draw_dashed_hline(img: &mut RgbaImage, x0: i32, y: i32, x1: i32, color: Rgb) {

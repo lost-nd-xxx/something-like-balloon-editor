@@ -151,6 +151,16 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
     let show_c  = is_c;
     let show_ks = !is_c;
 
+    // 縦書き設定（バルーン全体のテキスト方向のため、アコーディオン外に独立配置）
+    if show_ks {
+        use crate::gui::field_def::VERTICAL_FIELD;
+        ui.horizontal(|ui| {
+            ui.label(VERTICAL_FIELD.label);
+            show_field_widget(ui, app, ctx, &VERTICAL_FIELD, &cfg_key, use_individual);
+        });
+        ui.separator();
+    }
+
     for group in ACCORDION_GROUPS {
         let visible = match group.visibility {
             GroupVisibility::C   => show_c,
@@ -383,6 +393,9 @@ fn show_field_widget(
         }
         FieldType::Dropdown => {
             show_dropdown_widget(ui, app, ctx, field, &current_str, cfg_key, use_individual);
+        }
+        FieldType::Bool => {
+            show_bool_widget(ui, app, ctx, field, &current_str, cfg_key, use_individual);
         }
     }
 }
@@ -649,6 +662,29 @@ fn show_dropdown_widget(
     }
 }
 
+/// チェックボックスウィジェット（"0"/"1"。OFF時も "0" を明示的に書く）
+fn show_bool_widget(
+    ui: &mut Ui,
+    app: &mut BalloonEditorApp,
+    ctx: &egui::Context,
+    field: &crate::gui::field_def::FieldDef,
+    current_str: &str,
+    cfg_key: &str,
+    use_individual: bool,
+) {
+    let mut checked = current_str.trim() == "1";
+    if ui.checkbox(&mut checked, "").changed() {
+        app.state.push_undo();
+        let descript_text = if use_individual {
+            app.state.individual_texts.get(cfg_key).cloned().unwrap_or_default()
+        } else {
+            app.state.descript_text.clone()
+        };
+        let new_text = set_descript_value(&descript_text, field.key, if checked { "1" } else { "0" });
+        write_back(app, ctx, cfg_key, use_individual, new_text);
+    }
+}
+
 /// descript テキストを書き戻してプレビューを更新する
 fn write_back(app: &mut BalloonEditorApp, ctx: &egui::Context, cfg_key: &str, use_individual: bool, new_text: String) {
     if use_individual {
@@ -708,7 +744,18 @@ fn show_drag_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &egui::C
             let area_target = if is_c { DragEditTarget::CommunicateBox } else { DragEditTarget::ValidRect };
             all_entries.push((area_label, area_target));
             if !is_c {
-                all_entries.push(("折り返し X", DragEditTarget::WordWrap));
+                // 縦書き時は折り返しが wordwrappoint.y になる（個別設定 → 共通設定の順で判定）
+                let cfg_key = format!("{}s.txt", sel.trim_end_matches(".png"));
+                let vertical = app.state.individual_texts.get(&cfg_key)
+                    .and_then(|t| parse_descript(t).get("vertical").cloned())
+                    .or_else(|| parse_descript(&app.state.descript_text).get("vertical").cloned())
+                    .map(|v| v.trim() == "1")
+                    .unwrap_or(false);
+                if vertical {
+                    all_entries.push(("折り返し Y", DragEditTarget::WordWrapY));
+                } else {
+                    all_entries.push(("折り返し X", DragEditTarget::WordWrap));
+                }
                 if parts.contains_key("arrow0.png")    { all_entries.push(("矢印(上)",     DragEditTarget::Arrow0));       }
                 if parts.contains_key("arrow1.png")    { all_entries.push(("矢印(下)",     DragEditTarget::Arrow1));       }
                 if parts.contains_key("clickwait.png") { all_entries.push(("クリック待ち",   DragEditTarget::ClickWait));    }

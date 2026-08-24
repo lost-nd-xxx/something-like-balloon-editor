@@ -425,7 +425,8 @@ fn target_info(
         }
         // ValidRect/CommunicateBox は辺ごとに値が違うので (0,0) を返す（draw_drag_overlay で個別に読む）
         DragEditTarget::ValidRect | DragEditTarget::CommunicateBox => (0, 0),
-        DragEditTarget::WordWrap => (g("wordwrappoint.x"), 0),
+        DragEditTarget::WordWrap  => (g("wordwrappoint.x"), 0),
+        DragEditTarget::WordWrapY => (0, g("wordwrappoint.y")),
     };
     TargetInfo { current_val: val }
 }
@@ -452,6 +453,8 @@ fn compute_new_val_with_edge(
         | DragEditTarget::Counter => (start.0 + dx, start.1 + dy),
         // x のみ
         DragEditTarget::WordWrap => (start.0 + dx, start.1),
+        // y のみ
+        DragEditTarget::WordWrapY => (start.0, start.1 + dy),
         // ValidRect/CommunicateBox は辺に応じて軸を決定
         DragEditTarget::ValidRect | DragEditTarget::CommunicateBox => {
             match edge {
@@ -508,6 +511,8 @@ fn clamp_val(
         DragEditTarget::Counter => (vx.clamp(0, iw), vy.clamp(0, ih)),
         // WordWrap: x のみ [0, iw]
         DragEditTarget::WordWrap => (vx.clamp(0, iw), vy),
+        // WordWrapY: y のみ [0, ih]
+        DragEditTarget::WordWrapY => (vx, vy.clamp(0, ih)),
         // ValidRect: 各辺を [0, iw/ih] に収め、対辺との間隔を最低 MIN_GAP px 確保する
         DragEditTarget::ValidRect => {
             const MIN_GAP: i32 = 10;
@@ -602,6 +607,7 @@ fn was_negative_in_descript(
         DragEditTarget::OnlineMarker => (raw("onlinemarker.x"),   raw("onlinemarker.y")),
         DragEditTarget::Counter      => (false, raw("number.y")), // xr は常に iw からの相対値
         DragEditTarget::WordWrap     => (raw("wordwrappoint.x"),  false),
+        DragEditTarget::WordWrapY    => (false, raw("wordwrappoint.y")),
         DragEditTarget::ValidRect => match active_edge {
             Some(RectEdge::Left)   => (raw("validrect.left"),   false),
             Some(RectEdge::Right)  => (raw("validrect.right"),  false),
@@ -658,6 +664,9 @@ fn write_val_to_descript(
         }
         DragEditTarget::WordWrap => {
             text = set_descript_value(&text, "wordwrappoint.x", &vx);
+        }
+        DragEditTarget::WordWrapY => {
+            text = set_descript_value(&text, "wordwrappoint.y", &vy);
         }
         DragEditTarget::ValidRect => {
             match edge {
@@ -817,6 +826,15 @@ fn draw_drag_overlay(
             draw_vline_s(&painter, x, stroke_active);
             draw_handle(&painter, egui::pos2(x, mid_y), true);
             label_text = format!("x: {}", vx);
+        }
+
+        // WordWrapY — 横線1本（縦書き時の折り返し）
+        DragEditTarget::WordWrapY => {
+            let vy = current_val.map(|(_, y)| y).unwrap_or_else(|| g("wordwrappoint.y"));
+            let y = py(vy);
+            draw_hline_s(&painter, y, stroke_active);
+            draw_handle(&painter, egui::pos2(mid_x, y), true);
+            label_text = format!("y: {}", vy);
         }
 
         // ValidRect — 4辺を表示、操作中の辺を強調

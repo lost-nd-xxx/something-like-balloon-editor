@@ -236,6 +236,8 @@ fn initial_descript_text() -> String {
         "validrect.right,-10",
         "validrect.bottom,-10",
         "wordwrappoint.x,-20",
+        "vertical,0",
+        "wordwrappoint.y,-20",
         "arrow0.x,-5",
         "arrow0.y,5",
         "arrow1.x,-5",
