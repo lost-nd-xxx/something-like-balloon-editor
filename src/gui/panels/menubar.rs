@@ -193,8 +193,8 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
             }
             ui.separator();
 
-            // テーマ（サブメニュー）
-            ui.menu_button("テーマ", |ui| {
+            // アプリテーマ（サブメニュー）
+            ui.menu_button("アプリテーマ", |ui| {
                 for (mode, label) in [
                     (ThemeMode::Light, "ライト"),
                     (ThemeMode::Dark,  "ダーク"),
