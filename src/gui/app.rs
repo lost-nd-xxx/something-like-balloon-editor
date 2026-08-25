@@ -2256,7 +2256,13 @@ impl eframe::App for BalloonEditorApp {
         self.state.panel_right_width = right_resp.response.rect.width();
 
         // 中央：プレビュー
-        egui::CentralPanel::default().show(ctx, |ui| {
+        // CentralPanel の既定 inner_margin は上下左右 8px。プレビューは
+        // ヘッダーを持たず canvas_rect が clip_rect の幅いっぱいを使うため、
+        // 上マージンだけが空白の帯として残ってしまう。上を 0 にして詰める
+        // （左右・下は隣のペインとの境界を分けるため既定のまま残す）。
+        let central_frame = egui::Frame::central_panel(&ctx.style())
+            .inner_margin(egui::Margin { left: 8.0, right: 8.0, top: 0.0, bottom: 8.0 });
+        egui::CentralPanel::default().frame(central_frame).show(ctx, |ui| {
             panels::preview::show(ui, self, ctx);
         });
 

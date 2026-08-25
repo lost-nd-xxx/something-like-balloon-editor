@@ -359,8 +359,74 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                         }
                     });
 
+                // 文字色・背景色の設定直下にコントラスト比を出す。
+                // 計算対象と一致するグループにのみ表示する
+                // （k/s系=通常文字の font.color、c系=入力ボックスの色）。
+                if group.name == "通常文字" || group.name == "入力ボックス" {
+                    show_contrast(ui, app);
+                }
             });
     }
+}
+
+/// コントラスト比の判定結果（WCAG2 / APCA の2指標）
+struct ContrastInfo {
+    wcag: String,
+    apca: String,
+}
+
+/// 選択中バルーンのコントラスト比を算出する。
+/// k/s系: バルーン画像中央サンプリング色 vs font.color
+/// c*系 : communicatebox.background.color vs communicatebox.font.color
+///
+/// 背景色は「塗り」レイヤーの色変更が合成結果に反映されたものを
+/// サンプリングするため、ツールバーで色を変えると追随する。
+fn calc_contrast(app: &BalloonEditorApp) -> Option<ContrastInfo> {
+    use crate::core::color::{contrast_ratio, wcag_level, apca_lc, apca_bronze};
+    use crate::core::composer::sample_center_color;
+
+    let balloon_name = app.state.selected_balloon.trim_end_matches(".png");
+    let cfg_key = format!("{}s.txt", balloon_name);
+    // 個別設定と共通設定をマージ（個別設定が優先、差分ファイル仕様に対応）
+    let parsed = {
+        let mut merged = parse_descript(&app.state.descript_text);
+        if let Some(indiv) = app.state.individual_texts.get(&cfg_key) {
+            for (k, v) in parse_descript(indiv) { merged.insert(k, v); }
+        }
+        merged
+    };
+
+    let (bg, fg) = if app.state.is_balloonc() {
+        (
+            get_color_from_descript(&parsed, "communicatebox.background.color")
+                .unwrap_or(Rgb(255, 255, 255)),
+            get_color_from_descript(&parsed, "communicatebox.font.color")
+                .unwrap_or(Rgb(0, 0, 0)),
+        )
+    } else {
+        let img = app.state.balloon_cache.get(&app.state.selected_balloon)?;
+        (
+            sample_center_color(img, 0.25),
+            get_color_from_descript(&parsed, "font.color").unwrap_or(Rgb(0, 0, 0)),
+        )
+    };
+
+    let ratio = contrast_ratio(bg, fg);
+    let lc    = apca_lc(fg, bg);
+    Some(ContrastInfo {
+        wcag: format!("WCAG2: {:.2}:1 {}", ratio, wcag_level(ratio)),
+        apca: format!("APCA:  Lc {:.1} {}", lc, apca_bronze(lc)),
+    })
+}
+
+/// コントラスト比を表示する。文字色・背景色の設定直下に置くため、
+/// 色を変えた結果がその場で確認できる。
+fn show_contrast(ui: &mut Ui, app: &BalloonEditorApp) {
+    let Some(info) = calc_contrast(app) else { return };
+    ui.separator();
+    ui.label(egui::RichText::new("コントラスト比").small());
+    ui.label(egui::RichText::new(info.wcag).small());
+    ui.label(egui::RichText::new(info.apca).small());
 }
 
 /// 縦書き（vertical,1）が有効か（個別設定 → 共通設定の順で解決）

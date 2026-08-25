@@ -1,9 +1,7 @@
 use egui::{Context, Ui, Vec2};
 use crate::gui::app::BalloonEditorApp;
 use crate::gui::state::{CanvasBg, DragEditTarget, DragState, RectEdge};
-use crate::core::descript::{parse_descript, set_descript_value, pos_str, get_color_from_descript};
-use crate::core::color::{contrast_ratio, wcag_level, apca_lc, apca_bronze, Rgb};
-use crate::core::composer::sample_center_color;
+use crate::core::descript::{parse_descript, set_descript_value, pos_str};
 use image::RgbaImage;
 
 /// field_def の ACCORDION_GROUPS からキー→デフォルト値のマップを構築する
@@ -16,25 +14,14 @@ fn field_defaults() -> std::collections::HashMap<&'static str, &'static str> {
 }
 
 pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
-    // プレビューテクスチャが未作成なら生成（ヘッダーで画像サイズを表示するため先に確保）
+    // プレビューテクスチャが未作成なら生成
     if app.preview_texture.is_none() {
         app.refresh_preview_texture(ctx);
     }
 
-    // ヘッダー行：「プレビュー」ラベル ＋ コントラスト比
-    ui.horizontal(|ui| {
-        ui.strong("プレビュー");
-        if let Some(contrast_text) = calc_contrast_label(app) {
-            ui.separator();
-            ui.label(contrast_text);
-        }
-    });
-    ui.separator();
-
     let available = ui.available_size();
     // プレビュー領域の rect（画像描画とオーバーレイの中央計算に使う）
-    // available_rect_before_wrap() はヘッダー（ラベル・コントラスト比）の下から始まる
-    // 残り領域を返すため、ヘッダーを隠さずに中央配置できる。
+    // ヘッダーを持たないため、パネル上端からそのまま使う。
     // 横方向は clip_rect の幅を使い、パネル全幅で中央寄せする。
     let canvas_rect = {
         let avail = ui.available_rect_before_wrap();
@@ -957,44 +944,3 @@ fn draw_checker(painter: &egui::Painter, rect: egui::Rect) {
     }
 }
 
-/// コントラスト比ラベル文字列を計算する。
-/// k/s系: バルーン画像中央サンプリング色 vs font.color
-/// c*系 : communicatebox.background.color vs communicatebox.font.color
-fn calc_contrast_label(app: &BalloonEditorApp) -> Option<String> {
-    let balloon_name = app.state.selected_balloon.trim_end_matches(".png");
-    let cfg_key = format!("{}s.txt", balloon_name);
-    // 個別設定と共通設定をマージ（個別設定が優先、差分ファイル仕様に対応）
-    let parsed = {
-        let mut merged = parse_descript(&app.state.descript_text);
-        if let Some(indiv) = app.state.individual_texts.get(&cfg_key) {
-            for (k, v) in parse_descript(indiv) { merged.insert(k, v); }
-        }
-        merged
-    };
-
-    if app.state.is_balloonc() {
-        // c*系: communicatebox の背景色 vs 文字色
-        let bg = get_color_from_descript(&parsed, "communicatebox.background.color")
-            .unwrap_or(Rgb(255, 255, 255));
-        let fg = get_color_from_descript(&parsed, "communicatebox.font.color")
-            .unwrap_or(Rgb(0, 0, 0));
-        let ratio = contrast_ratio(bg, fg);
-        let lc    = apca_lc(fg, bg);
-        Some(format!(
-            "コントラスト比  WCAG2: {:.2}:1 {}  /  APCA: Lc {:.1} {}",
-            ratio, wcag_level(ratio), lc, apca_bronze(lc)
-        ))
-    } else {
-        // k/s系: バルーン画像中央サンプリング色 vs font.color
-        let img  = app.state.balloon_cache.get(&app.state.selected_balloon)?;
-        let base = sample_center_color(img, 0.25);
-        let fg   = get_color_from_descript(&parsed, "font.color")
-            .unwrap_or(Rgb(0, 0, 0));
-        let ratio = contrast_ratio(base, fg);
-        let lc    = apca_lc(fg, base);
-        Some(format!(
-            "コントラスト比  WCAG2: {:.2}:1 {}  /  APCA: Lc {:.1} {}",
-            ratio, wcag_level(ratio), lc, apca_bronze(lc)
-        ))
-    }
-}
