@@ -2200,17 +2200,23 @@ impl eframe::App for BalloonEditorApp {
             if !open { self.state.show_bg_color_window = false; }
         }
 
+        // モーダル表示中か（ショートカットの抑止に使う）
+        let modal_now = self.is_modal_active();
+
         // キーボードショートカット（ctx.input のクロージャ外で ctx を使う処理を行う）
+        //
+        // モーダル表示中は全ショートカットを無効にする。バックドロップはポインタ操作しか
+        // 遮断できず、キー入力とホイールは背後へ素通りしてしまうため。
         #[derive(Default)]
         struct Keys { export: bool, save: bool, undo: bool, redo: bool, refresh: bool }
-        let keys = ctx.input(|i| Keys {
+        let keys = if modal_now { Keys::default() } else { ctx.input(|i| Keys {
             export:  i.key_pressed(egui::Key::E) && i.modifiers.ctrl,
             save:    i.key_pressed(egui::Key::S) && i.modifiers.ctrl,
             undo:    i.key_pressed(egui::Key::Z) && i.modifiers.ctrl && !i.modifiers.shift,
             redo:    (i.key_pressed(egui::Key::Y) && i.modifiers.ctrl)
                   || (i.key_pressed(egui::Key::Z) && i.modifiers.ctrl && i.modifiers.shift),
             refresh: i.key_pressed(egui::Key::F5),
-        });
+        })};
         if keys.export  { self.pending_export = true; }
         if keys.save && self.state.is_project_dir() { self.save_project(); }
         if keys.undo {
@@ -2283,18 +2289,7 @@ impl eframe::App for BalloonEditorApp {
         // 重なり順: Foreground（このバックドロップ）
         //         < Tooltip（各モーダル本体・確認用バックドロップ）
         //         < Debug（確認モーダル本体）
-        let modal_active = self.dialog.is_some()
-            || self.export_done_dir.is_some()
-            || self.state.pending_unsaved_action.is_some()
-            || self.state.pending_confirm.is_some()
-            || self.state.show_open_project_window
-            || self.state.show_new_project_window
-            || self.state.show_import_folder_window
-            || self.state.show_rename_window
-            || self.state.show_save_as_project_window
-            || self.state.show_import_window
-            // ネイティブ選択ダイアログを開いている間もグレーアウトを維持する
-            || self.native_dialog_open;
+        let modal_active = self.is_modal_active();
         if modal_active {
             draw_modal_backdrop(ctx, "modal_input_blocker", egui::Order::Foreground);
         }
@@ -2514,6 +2509,30 @@ pub fn apply_theme(ctx: &egui::Context, theme: crate::gui::state::ThemeMode) {
         ctx.set_visuals(egui::Visuals::dark());
     } else {
         ctx.set_visuals(egui::Visuals::light());
+    }
+}
+
+impl BalloonEditorApp {
+    /// モーダル（各種ウィンドウ・確認ダイアログ・ネイティブ選択ダイアログ）が
+    /// 表示中かどうか。バックドロップの描画と、キーボードショートカットの
+    /// 抑止の両方で使う。
+    ///
+    /// バックドロップ（draw_modal_backdrop）が吸収できるのはポインタの
+    /// クリック・ドラッグのみで、キー入力とホイールは素通りするため、
+    /// ショートカット側でも明示的に止める必要がある。
+    pub fn is_modal_active(&self) -> bool {
+        self.dialog.is_some()
+            || self.export_done_dir.is_some()
+            || self.state.pending_unsaved_action.is_some()
+            || self.state.pending_confirm.is_some()
+            || self.state.show_open_project_window
+            || self.state.show_new_project_window
+            || self.state.show_import_folder_window
+            || self.state.show_rename_window
+            || self.state.show_save_as_project_window
+            || self.state.show_import_window
+            // ネイティブ選択ダイアログを開いている間もグレーアウトを維持する
+            || self.native_dialog_open
     }
 }
 
