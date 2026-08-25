@@ -10,6 +10,8 @@ use crate::core::color::Rgb;
 use crate::gui::state::DragEditTarget;
 
 pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
+    // SidePanel の inner_margin は上が詰まっているため、題字の上に余白を入れる
+    ui.add_space(3.0);
     ui.strong("バルーン設定");
     ui.separator();
 
@@ -190,7 +192,7 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
     let show_c  = is_c;
     let show_ks = !is_c;
 
-    // 縦書き設定（バルーン全体のテキスト方向のため、アコーディオン外に独立配置）
+    // テキスト方向（バルーン全体に効く設定のため、アコーディオン外に独立配置）
     if show_ks {
         use crate::gui::field_def::VERTICAL_FIELD;
         ui.horizontal(|ui| {
@@ -520,8 +522,8 @@ fn show_field_widget(
         FieldType::Dropdown => {
             show_dropdown_widget(ui, app, ctx, field, &current_str, cfg_key, use_individual);
         }
-        FieldType::Bool => {
-            show_bool_widget(ui, app, ctx, field, &current_str, cfg_key, use_individual);
+        FieldType::Direction => {
+            show_direction_widget(ui, app, ctx, field, &current_str, cfg_key, use_individual);
         }
     }
 }
@@ -796,8 +798,10 @@ fn show_dropdown_widget(
     }
 }
 
-/// チェックボックスウィジェット（"0"/"1"。OFF時も "0" を明示的に書く）
-fn show_bool_widget(
+/// テキスト方向ドロップダウン（"0"=横書き / "1"=縦書き）。
+/// 表示名と descript.txt の値が異なるため、汎用 Dropdown とは別実装。
+/// 横書き時も "0" を明示的に書く。
+fn show_direction_widget(
     ui: &mut Ui,
     app: &mut BalloonEditorApp,
     ctx: &egui::Context,
@@ -806,15 +810,32 @@ fn show_bool_widget(
     cfg_key: &str,
     use_individual: bool,
 ) {
-    let mut checked = current_str.trim() == "1";
-    if ui.checkbox(&mut checked, "").changed() {
+    use crate::gui::field_def::DIRECTION_CHOICES;
+
+    // 未設定・不正値は既定の "0"（横書き）として扱う
+    let current = if current_str.trim() == "1" { "1" } else { "0" };
+    let label_of = |v: &str| DIRECTION_CHOICES.iter()
+        .find(|(_, val)| *val == v)
+        .map(|(name, _)| *name)
+        .unwrap_or("横書き");
+
+    let mut selected = current.to_string();
+    egui::ComboBox::from_id_salt(field.key)
+        .selected_text(label_of(current))
+        .show_ui(ui, |ui| {
+            for &(name, val) in DIRECTION_CHOICES {
+                ui.selectable_value(&mut selected, val.to_string(), name);
+            }
+        });
+
+    if selected != current {
         app.state.push_undo();
         let descript_text = if use_individual {
             app.state.individual_texts.get(cfg_key).cloned().unwrap_or_default()
         } else {
             app.state.descript_text.clone()
         };
-        let new_text = set_descript_value(&descript_text, field.key, if checked { "1" } else { "0" });
+        let new_text = set_descript_value(&descript_text, field.key, &selected);
         write_back(app, ctx, cfg_key, use_individual, new_text);
     }
 }
@@ -855,7 +876,7 @@ fn color32_to_rgb(c: egui::Color32) -> Rgb {
 // ---------------------------------------------------------------------------
 
 fn show_drag_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &egui::Context) {
-    egui::CollapsingHeader::new("位置編集")
+    egui::CollapsingHeader::new("位置編集(ドラッグ操作)")
         .default_open(false)
         .show(ui, |ui| {
             // 常時表示のガイド文言

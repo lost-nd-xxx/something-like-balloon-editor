@@ -6,7 +6,7 @@ pub enum FieldType {
     Text,      // テキスト
     Int,       // 整数（Spinbox）
     Dropdown,  // ドロップダウン選択
-    Bool,      // チェックボックス（"0"/"1"）
+    Direction, // テキスト方向ドロップダウン（"0"=横書き / "1"=縦書き）
 }
 
 #[derive(Debug, Clone)]
@@ -105,9 +105,16 @@ macro_rules! fd {
     };
 }
 
-/// 縦書き設定（バルーン全体のテキスト方向）。アコーディオン外に独立配置する
+/// テキスト方向（vertical）の選択肢。表示名と descript.txt の値の対応。
+/// 値が "0"/"1" のため、表示名をそのまま値に使う Dropdown とは別扱いにする。
+pub const DIRECTION_CHOICES: &[(&str, &str)] = &[
+    ("横書き", "0"),
+    ("縦書き", "1"),
+];
+
+/// テキスト方向設定（バルーン全体に効く）。アコーディオン外に独立配置する
 pub static VERTICAL_FIELD: FieldDef =
-    fd!("vertical", "縦書き", FieldType::Bool, &[], "0");
+    fd!("vertical", "テキスト方向", FieldType::Direction, &[], "0");
 
 pub static ACCORDION_GROUPS: &[AccordionGroup] = &[
     AccordionGroup {
