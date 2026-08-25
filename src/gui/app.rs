@@ -2232,7 +2232,12 @@ impl eframe::App for BalloonEditorApp {
         });
 
         // ツールバー（4色ピッカー＋出力ボタン）
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+        // TopBottomPanel の既定 inner_margin は垂直 2px しかなく、hex 入力欄に
+        // カーソルを乗せたときの hover 枠がパネル境界でクリップされて
+        // 下辺が欠ける。垂直だけ少し広げて枠が収まるようにする。
+        let toolbar_frame = egui::Frame::side_top_panel(&ctx.style())
+            .inner_margin(egui::Margin::symmetric(8.0, 4.0));
+        egui::TopBottomPanel::top("toolbar").frame(toolbar_frame).show(ctx, |ui| {
             panels::toolbar::show(ui, self, ctx);
         });
 
