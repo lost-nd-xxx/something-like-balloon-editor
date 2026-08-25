@@ -1,6 +1,6 @@
 use egui::{Context, Ui};
 use crate::gui::app::BalloonEditorApp;
-use crate::gui::state::{PreviewTextMode, ThemeMode};
+use crate::gui::state::{PreviewTextMode, ThemeMode, ZOOM_STEPS};
 
 pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
     egui::menu::bar(ui, |ui| {
@@ -227,6 +227,17 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                         ui.close_menu();
                     }
                 });
+            });
+
+            // プレビュー倍率（サブメニュー）
+            ui.menu_button("プレビュー倍率", |ui| {
+                for (i, z) in ZOOM_STEPS.iter().enumerate() {
+                    let label = format!("{}%", (z * 100.0) as i32);
+                    if ui.radio(app.state.preview_zoom_idx == i, label).clicked() {
+                        app.state.preview_zoom_idx = i;
+                        ui.close_menu();
+                    }
+                }
             });
         });
 

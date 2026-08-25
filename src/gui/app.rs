@@ -43,6 +43,10 @@ impl BalloonEditorApp {
         // 日本語フォントを設定する
         setup_japanese_font(&cc.egui_ctx);
 
+        // egui 組み込みの Ctrl +/-/0 による UI 全体ズームを無効化する。
+        // これらのキーはプレビュー倍率の操作に割り当てるため。
+        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
+
         let root = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
@@ -2200,7 +2204,7 @@ impl eframe::App for BalloonEditorApp {
             if !open { self.state.show_bg_color_window = false; }
         }
 
-        // モーダル表示中か（ショートカットの抑止に使う）
+        // モーダル表示中か（ショートカットとプレビューのホイールズームの抑止に使う）
         let modal_now = self.is_modal_active();
 
         // キーボードショートカット（ctx.input のクロージャ外で ctx を使う処理を行う）
@@ -2208,7 +2212,8 @@ impl eframe::App for BalloonEditorApp {
         // モーダル表示中は全ショートカットを無効にする。バックドロップはポインタ操作しか
         // 遮断できず、キー入力とホイールは背後へ素通りしてしまうため。
         #[derive(Default)]
-        struct Keys { export: bool, save: bool, undo: bool, redo: bool, refresh: bool }
+        struct Keys { export: bool, save: bool, undo: bool, redo: bool, refresh: bool,
+                      zoom_in: bool, zoom_out: bool, zoom_reset: bool }
         let keys = if modal_now { Keys::default() } else { ctx.input(|i| Keys {
             export:  i.key_pressed(egui::Key::E) && i.modifiers.ctrl,
             save:    i.key_pressed(egui::Key::S) && i.modifiers.ctrl,
@@ -2216,6 +2221,11 @@ impl eframe::App for BalloonEditorApp {
             redo:    (i.key_pressed(egui::Key::Y) && i.modifiers.ctrl)
                   || (i.key_pressed(egui::Key::Z) && i.modifiers.ctrl && i.modifiers.shift),
             refresh: i.key_pressed(egui::Key::F5),
+            // 日本語配列では + に Shift が要るため Equals も受ける
+            zoom_in:    (i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals))
+                        && i.modifiers.ctrl,
+            zoom_out:   i.key_pressed(egui::Key::Minus) && i.modifiers.ctrl,
+            zoom_reset: i.key_pressed(egui::Key::Num0)  && i.modifiers.ctrl,
         })};
         if keys.export  { self.pending_export = true; }
         if keys.save && self.state.is_project_dir() { self.save_project(); }
@@ -2231,6 +2241,17 @@ impl eframe::App for BalloonEditorApp {
             ctx.memory_mut(|m| m.reset_areas());
         }
         if keys.refresh { self.reload_asset_folder_keep_texts(ctx); }
+        // ズームは表示倍率を変えるだけなのでプレビュー再生成は不要
+        if keys.zoom_in {
+            self.state.preview_zoom_idx =
+                (self.state.preview_zoom_idx + 1).min(crate::gui::state::ZOOM_STEPS.len() - 1);
+        }
+        if keys.zoom_out {
+            self.state.preview_zoom_idx = self.state.preview_zoom_idx.saturating_sub(1);
+        }
+        if keys.zoom_reset {
+            self.state.preview_zoom_idx = crate::gui::state::ZOOM_DEFAULT_IDX;
+        }
 
         // メニューバー
         egui::TopBottomPanel::top("menubar").show(ctx, |ui| {
@@ -2514,8 +2535,8 @@ pub fn apply_theme(ctx: &egui::Context, theme: crate::gui::state::ThemeMode) {
 
 impl BalloonEditorApp {
     /// モーダル（各種ウィンドウ・確認ダイアログ・ネイティブ選択ダイアログ）が
-    /// 表示中かどうか。バックドロップの描画と、キーボードショートカットの
-    /// 抑止の両方で使う。
+    /// 表示中かどうか。バックドロップの描画と、キーボード／ホイール
+    /// ショートカットの抑止の両方で使う。
     ///
     /// バックドロップ（draw_modal_backdrop）が吸収できるのはポインタの
     /// クリック・ドラッグのみで、キー入力とホイールは素通りするため、

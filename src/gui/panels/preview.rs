@@ -1,6 +1,6 @@
 use egui::{Context, Ui, Vec2};
 use crate::gui::app::BalloonEditorApp;
-use crate::gui::state::{CanvasBg, DragEditTarget, DragState, RectEdge};
+use crate::gui::state::{CanvasBg, DragEditTarget, DragState, RectEdge, ZOOM_STEPS};
 use crate::core::descript::{parse_descript, set_descript_value, pos_str};
 use image::RgbaImage;
 
@@ -34,60 +34,112 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
 
     let texture_info = app.preview_texture.as_ref().map(|t| (t.id(), t.size_vec2()));
 
+    // canvas_bg に応じた背景をペイン全体へ描画（ScrollArea は透明なので下から透ける）
+    match &app.state.canvas_bg {
+        CanvasBg::Checker => draw_checker(ui.painter(), canvas_rect),
+        CanvasBg::Solid(r, g, b) => {
+            ui.painter().rect_filled(canvas_rect, 0.0, egui::Color32::from_rgb(*r, *g, *b));
+        }
+    }
+
     match texture_info {
         Some((tex_id, img_size)) => {
-            let offset_x = (canvas_rect.width()  - img_size.x).max(0.0) / 2.0;
-            let offset_y = (canvas_rect.height() - img_size.y).max(0.0) / 2.0;
+            let zoom = ZOOM_STEPS
+                .get(app.state.preview_zoom_idx)
+                .copied()
+                .unwrap_or(1.0);
+            let scaled = img_size * zoom;
 
-            let img_rect = egui::Rect::from_min_size(
-                canvas_rect.min + Vec2::new(offset_x, offset_y),
-                img_size,
-            );
+            let out = egui::ScrollArea::both()
+                .id_salt("preview_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    // 画像が領域より小さいときは領域サイズを確保して中央寄せ、
+                    // 大きいときは画像サイズ分を確保してスクロールさせる
+                    let content = egui::vec2(
+                        scaled.x.max(ui.available_width()),
+                        scaled.y.max(ui.available_height()),
+                    );
+                    let (content_rect, _) =
+                        ui.allocate_exact_size(content, egui::Sense::hover());
+                    let center_off = ((content_rect.size() - scaled) / 2.0).max(Vec2::ZERO);
+                    let img_rect = egui::Rect::from_min_size(content_rect.min + center_off, scaled);
 
-            let painter = ui.painter();
+                    // バルーン画像を描画
+                    ui.painter().image(
+                        tex_id,
+                        img_rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
 
-            // canvas_bg に応じた背景を描画
-            match &app.state.canvas_bg {
-                CanvasBg::Checker => draw_checker(painter, canvas_rect),
-                CanvasBg::Solid(r, g, b) => {
-                    painter.rect_filled(canvas_rect, 0.0, egui::Color32::from_rgb(*r, *g, *b));
-                }
-            }
-
-            // バルーン画像を描画
-            painter.image(
-                tex_id,
-                img_rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                egui::Color32::WHITE,
-            );
-
-            // キャンバス右下に画像サイズを矩形背景付きで表示
-            {
-                let label = format!("{}×{} px", img_size.x as i32, img_size.y as i32);
-                let font_id = egui::FontId::monospace(12.0);
-                let galley = ui.ctx().fonts(|f| {
-                    f.layout_no_wrap(label, font_id, egui::Color32::WHITE)
+                    // ドラッグ位置編集モードの処理
+                    if app.state.drag_edit_target.is_some() {
+                        let iw = img_size.x as i32;
+                        let ih = img_size.y as i32;
+                        // parts_cache から選択バルーンのパーツ画像を取得
+                        let sel = app.state.selected_balloon.clone();
+                        let parts_snap: std::collections::HashMap<String, RgbaImage> =
+                            app.state.parts_cache.get(&sel).cloned().unwrap_or_default();
+                        handle_drag_edit(ui, app, ctx, img_rect, iw, ih, zoom, &parts_snap);
+                    }
                 });
-                let pad = egui::vec2(6.0, 3.0);
-                let margin = egui::vec2(4.0, 4.0);
-                let bg_size = galley.size() + pad * 2.0;
-                // 右下基準: キャンバス右下からマージンとラベルサイズ分を引く
-                let bg_pos = canvas_rect.max - margin - bg_size;
-                let bg_rect = egui::Rect::from_min_size(bg_pos, bg_size);
-                painter.rect_filled(bg_rect, 4.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 160));
-                painter.galley(bg_pos + pad, galley, egui::Color32::WHITE);
-            }
 
-            // ドラッグ位置編集モードの処理
-            if app.state.drag_edit_target.is_some() {
-                let iw = img_size.x as i32;
-                let ih = img_size.y as i32;
-                // parts_cache から選択バルーンのパーツ画像を取得
-                let sel = app.state.selected_balloon.clone();
-                let parts_snap: std::collections::HashMap<String, RgbaImage> =
-                    app.state.parts_cache.get(&sel).cloned().unwrap_or_default();
-                handle_drag_edit(ui, app, ctx, img_rect, iw, ih, &parts_snap);
+            // 左下ラベル・右下UIの配置基準。
+            // auto_shrink を無効にしているため out.inner_rect にはスクロールバーの
+            // 領域が含まれたままになる（scroll_area.rs の (true, false) 分岐）。
+            // バーと重ならないよう、表示中のバーの幅ぶんだけ内側へ寄せる。
+            let view = {
+                let sc = &ctx.style().spacing.scroll;
+                let bar = sc.bar_width + sc.bar_inner_margin + sc.bar_outer_margin;
+                let r = out.inner_rect;
+                let need_h = out.content_size.x > r.width();   // 横バーが出るか
+                let need_v = out.content_size.y > r.height();  // 縦バーが出るか
+                egui::Rect::from_min_max(
+                    r.min,
+                    egui::pos2(
+                        r.max.x - if need_v { bar } else { 0.0 },
+                        r.max.y - if need_h { bar } else { 0.0 },
+                    ),
+                )
+            };
+
+            // 左下に画像サイズを表示（スクロールしても固定）。
+            // 右下のズームUIと同じ Frame::popup を使い、アプリテーマに追従させる
+            show_size_label(ctx, view, img_size);
+
+            // 右下にズーム操作UI（スクロールしても固定）
+            show_zoom_ui(ctx, app, view);
+
+            // Ctrl+ホイールでズーム。Ctrl 押下時の delta は egui 内部で
+            // zoom 用に振り分けられるため、ScrollArea の通常スクロールとは競合しない。
+            //
+            // モーダル表示中は無効にする。バックドロップはポインタのクリック・ドラッグ
+            // しか遮断せず、ホイールは背後へ素通りしてしまうため。
+            let hovering = !app.is_modal_active()
+                && ctx.input(|i| i.pointer.hover_pos())
+                    .map_or(false, |p| canvas_rect.contains(p));
+            if hovering {
+                // egui はホイール1目盛りの delta をスムージングして複数フレームに配るため、
+                // フレームごとに段階を動かすと一度の操作で何段階も飛んでしまう。
+                // 対数量として累積し、しきい値を超えた分だけ段階に変換する。
+                let zd = ctx.input(|i| i.zoom_delta());
+                app.state.preview_zoom_accum += zd.ln();
+
+                // ホイール1目盛り＝1段階になるしきい値
+                const STEP: f32 = 0.15;
+                while app.state.preview_zoom_accum >= STEP {
+                    app.state.preview_zoom_accum -= STEP;
+                    app.state.preview_zoom_idx =
+                        (app.state.preview_zoom_idx + 1).min(ZOOM_STEPS.len() - 1);
+                }
+                while app.state.preview_zoom_accum <= -STEP {
+                    app.state.preview_zoom_accum += STEP;
+                    app.state.preview_zoom_idx = app.state.preview_zoom_idx.saturating_sub(1);
+                }
+            } else {
+                // ペイン外へ出たら中途半端な累積を持ち越さない
+                app.state.preview_zoom_accum = 0.0;
             }
         }
         None => {
@@ -121,6 +173,105 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
 }
 
 // ---------------------------------------------------------------------------
+// ズーム操作UI
+// ---------------------------------------------------------------------------
+
+/// プレビュー上のオーバーレイUI（左下の寸法表示・右下のズームUI）で共通に使う行の高さ。
+///
+/// ラベルだけの行とボタンを含む行では既定の高さが揃わないため、
+/// ボタンの縦寸法（枠線を含む）を基準に両者へ同じ最小高を与える。
+fn overlay_row_height(ui: &Ui) -> f32 {
+    let sp = ui.spacing();
+    let pad = sp.button_padding.y * 2.0;
+    // ComboBox はテキストに加えてドロップダウンアイコンを含むため、
+    // その分も見込んだ高さにする（combo_box.rs の icon_size 参照）
+    let content = ui
+        .text_style_height(&egui::TextStyle::Button)
+        .max(sp.icon_width);
+    sp.interact_size.y.max(content + pad)
+}
+
+/// プレビュー左下の画像サイズ表示（ペインに固定表示する）
+fn show_size_label(ctx: &Context, view: egui::Rect, img_size: Vec2) {
+    let area_id = egui::Id::new("preview_size_label");
+    // fixed_pos は左上指定のため、前フレームの実測サイズから左下位置を逆算する
+    let size = ctx
+        .memory(|m| m.area_rect(area_id).map(|r| r.size()))
+        .unwrap_or_else(|| egui::vec2(96.0, 28.0));
+    let margin = egui::vec2(4.0, 4.0);
+    let anchor = egui::pos2(view.min.x + margin.x, view.max.y - margin.y - size.y);
+
+    egui::Area::new(area_id)
+        .order(egui::Order::Middle)
+        .fixed_pos(anchor)
+        .constrain_to(view)
+        // 表示専用なので入力を受け取らない（背後のドラッグ編集を妨げない）
+        .interactable(false)
+        .show(ctx, |ui| {
+            egui::Frame::popup(&ctx.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    // 右下のズームUIと高さを揃える（overlay_row_height 参照）
+                    ui.set_min_height(overlay_row_height(ui));
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}×{} px",
+                            img_size.x as i32, img_size.y as i32
+                        ))
+                        .monospace(),
+                    );
+                });
+            });
+        });
+}
+
+/// プレビュー右下のズーム操作UI（ペインに固定表示する）
+fn show_zoom_ui(ctx: &Context, app: &mut BalloonEditorApp, view: egui::Rect) {
+    let area_id = egui::Id::new("preview_zoom_ui");
+    // fixed_pos は左上指定のため、前フレームの実測サイズから右下位置を逆算する
+    // （初回フレームのみ推定値を使う）
+    let size = ctx
+        .memory(|m| m.area_rect(area_id).map(|r| r.size()))
+        .unwrap_or_else(|| egui::vec2(240.0, 28.0));
+    let margin = egui::vec2(4.0, 4.0);
+    let anchor = view.max - margin - size;
+
+    // Order::Middle にすることで、モーダル表示中は Foreground の
+    // 入力ブロッカーに覆われて操作できなくなる
+    egui::Area::new(area_id)
+        .order(egui::Order::Middle)
+        .fixed_pos(anchor)
+        .constrain_to(view)
+        .interactable(true)
+        .show(ctx, |ui| {
+            egui::Frame::popup(&ctx.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.set_min_height(overlay_row_height(ui));
+                    let idx = app.state.preview_zoom_idx;
+                    let last = ZOOM_STEPS.len() - 1;
+
+                    if ui.add_enabled(idx > 0, egui::Button::new("−")).clicked() {
+                        app.state.preview_zoom_idx = idx - 1;
+                    }
+
+                    egui::ComboBox::from_id_salt("preview_zoom_combo")
+                        .selected_text(format!("{}%", (ZOOM_STEPS[idx] * 100.0) as i32))
+                        .width(64.0)
+                        .show_ui(ui, |ui| {
+                            for (i, z) in ZOOM_STEPS.iter().enumerate() {
+                                let label = format!("{}%", (z * 100.0) as i32);
+                                ui.selectable_value(&mut app.state.preview_zoom_idx, i, label);
+                            }
+                        });
+
+                    if ui.add_enabled(idx < last, egui::Button::new("＋")).clicked() {
+                        app.state.preview_zoom_idx = idx + 1;
+                    }
+                });
+            });
+        });
+}
+
+// ---------------------------------------------------------------------------
 // ドラッグ位置編集
 // ---------------------------------------------------------------------------
 
@@ -131,6 +282,7 @@ fn handle_drag_edit(
     img_rect: egui::Rect,
     iw: i32,
     ih: i32,
+    zoom: f32,
     parts: &std::collections::HashMap<String, RgbaImage>,
 ) {
     let target = match &app.state.drag_edit_target {
@@ -162,12 +314,16 @@ fn handle_drag_edit(
 
     let pointer_pos = ui.input(|i| i.pointer.hover_pos());
 
+    // 当たり判定の閾値: screen 上で約 8px 相当に保つ。ただし縮小時に判定域が
+    // 広がりすぎて対辺と重なるのを防ぐため、画像座標では 8px を上限とする
+    let edge_thresh = (8.0_f32 / zoom).min(8.0);
+
     // ValidRect/CommunicateBox: ホバー中の辺を検出してカーソルを変える
     let hovered_edge = if matches!(target, DragEditTarget::ValidRect | DragEditTarget::CommunicateBox) {
         pointer_pos.and_then(|pos| {
-            let ip = pos - img_rect.min;
+            let ip = (pos - img_rect.min) / zoom;
             detect_edge(&target, &parsed, &merged_defaults, iw, ih,
-                        egui::pos2(ip.x, ip.y), 8.0)
+                        egui::pos2(ip.x, ip.y), edge_thresh)
         })
     } else {
         None
@@ -196,7 +352,7 @@ fn handle_drag_edit(
     // ドラッグ開始
     if interact.drag_started() {
         if let Some(pos) = pointer_pos {
-            let img_pos = pos - img_rect.min;
+            let img_pos = (pos - img_rect.min) / zoom;
             let start_img = egui::pos2(img_pos.x, img_pos.y);
 
             // ValidRect/CommunicateBox: 辺を検出して start_val をその辺の現在値にセット
@@ -206,7 +362,7 @@ fn handle_drag_edit(
                 DragEditTarget::ValidRect | DragEditTarget::CommunicateBox)
             {
                 let edge = detect_edge(&target, &parsed, &merged_defaults,
-                                       iw, ih, start_img, 8.0);
+                                       iw, ih, start_img, edge_thresh);
                 let val = match edge {
                     Some(e @ (RectEdge::Left | RectEdge::Right)) => {
                         let v = if matches!(target, DragEditTarget::CommunicateBox) {
@@ -261,7 +417,7 @@ fn handle_drag_edit(
     // ドラッグ中
     if interact.dragged() {
         if let (Some(pos), Some(ds)) = (pointer_pos, &mut app.state.drag_state) {
-            let img_pos = pos - img_rect.min;
+            let img_pos = (pos - img_rect.min) / zoom;
             let dx = (img_pos.x - ds.start_img.x) as i32;
             let dy = (img_pos.y - ds.start_img.y) as i32;
             ds.current_val = compute_new_val_with_edge(&target, ds.active_edge, ds.start_val, dx, dy);
@@ -283,7 +439,7 @@ fn handle_drag_edit(
     // オーバーレイ描画
     let draw_state = app.state.drag_state.as_ref().map(|ds| (ds.current_val, ds.active_edge));
     draw_drag_overlay(ui, ctx, &target, &parsed, &merged_defaults,
-                      img_rect, draw_state, iw, ih, parts);
+                      img_rect, draw_state, iw, ih, zoom, parts);
 }
 
 // ---------------------------------------------------------------------------
@@ -711,6 +867,7 @@ fn draw_drag_overlay(
     drag_state: Option<((i32, i32), Option<RectEdge>)>,
     iw: i32,
     ih: i32,
+    zoom: f32,
     parts: &std::collections::HashMap<String, RgbaImage>,
 ) {
     let painter = ui.painter();
@@ -727,13 +884,13 @@ fn draw_drag_overlay(
 
     let draw_hline_s = |painter: &egui::Painter, y: f32, s: egui::Stroke| {
         let l = egui::pos2(origin.x, y);
-        let r = egui::pos2(origin.x + iw as f32, y);
+        let r = egui::pos2(origin.x + iw as f32 * zoom, y);
         painter.line_segment([l, r], stroke_out);
         painter.line_segment([l, r], s);
     };
     let draw_vline_s = |painter: &egui::Painter, x: f32, s: egui::Stroke| {
         let t = egui::pos2(x, origin.y);
-        let b = egui::pos2(x, origin.y + ih as f32);
+        let b = egui::pos2(x, origin.y + ih as f32 * zoom);
         painter.line_segment([t, b], stroke_out);
         painter.line_segment([t, b], s);
     };
@@ -749,10 +906,10 @@ fn draw_drag_overlay(
         painter.line_segment([egui::pos2(x, y-r), egui::pos2(x, y+r)], stroke_line);
     };
 
-    let px = |x: i32| origin.x + x as f32;
-    let py = |y: i32| origin.y + y as f32;
-    let mid_x = origin.x + iw as f32 / 2.0;
-    let mid_y = origin.y + ih as f32 / 2.0;
+    let px = |x: i32| origin.x + x as f32 * zoom;
+    let py = |y: i32| origin.y + y as f32 * zoom;
+    let mid_x = origin.x + iw as f32 * zoom / 2.0;
+    let mid_y = origin.y + ih as f32 * zoom / 2.0;
     let g = |k: &str| get_descript_val(k, parsed, defaults, iw, ih);
 
     // 操作中の辺（ドラッグ中 or ホバー）
@@ -799,7 +956,7 @@ fn draw_drag_overlay(
             } else { None };
             let overlay_img = img_key.and_then(|k| parts.get(k)).or(sstp_img);
             if let Some(rgba) = overlay_img {
-                paste_rgba_overlay(ctx, &painter, rgba, egui::pos2(x, y));
+                paste_rgba_overlay(ctx, &painter, rgba, egui::pos2(x, y), zoom);
             } else {
                 draw_cross(&painter, x, y);
             }
@@ -895,7 +1052,7 @@ fn draw_drag_overlay(
 }
 
 /// RgbaImage をその場で egui テクスチャに変換して painter で描画する（ドラッグ中オーバーレイ用）
-fn paste_rgba_overlay(ctx: &Context, painter: &egui::Painter, img: &RgbaImage, top_left: egui::Pos2) {
+fn paste_rgba_overlay(ctx: &Context, painter: &egui::Painter, img: &RgbaImage, top_left: egui::Pos2, zoom: f32) {
     let (w, h) = (img.width() as usize, img.height() as usize);
     let pixels: Vec<egui::Color32> = img.pixels()
         .map(|p| egui::Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]))
@@ -906,7 +1063,7 @@ fn paste_rgba_overlay(ctx: &Context, painter: &egui::Painter, img: &RgbaImage, t
         color_image,
         egui::TextureOptions::NEAREST,
     );
-    let rect = egui::Rect::from_min_size(top_left, egui::vec2(w as f32, h as f32));
+    let rect = egui::Rect::from_min_size(top_left, egui::vec2(w as f32 * zoom, h as f32 * zoom));
     painter.image(
         texture.id(),
         rect,

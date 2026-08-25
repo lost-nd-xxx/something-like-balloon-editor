@@ -19,6 +19,11 @@ pub const LAYER_DEFS: &[(&str, &str, Rgb)] = &[
     ("parts", "部品",   Rgb(29, 106, 184)),
 ];
 
+/// プレビュー表示倍率の段階
+pub const ZOOM_STEPS: &[f32] = &[0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0];
+/// ZOOM_STEPS における 100% のインデックス（既定値）
+pub const ZOOM_DEFAULT_IDX: usize = 3;
+
 /// アンドゥ/リドゥ用スナップショット
 #[derive(Debug, Clone)]
 pub struct Snapshot {
@@ -192,6 +197,11 @@ pub struct AppState {
     pub window_size:        [f32; 2],
     pub preview_generating: bool,
     pub show_bg_color_window: bool,
+    /// プレビュー表示倍率（ZOOM_STEPS のインデックス）。永続化しない
+    pub preview_zoom_idx:   usize,
+    /// Ctrl+ホイールのズーム量の累積。egui はホイール1目盛りの delta を
+    /// スムージングして複数フレームに配るため、累積して段階変更に変換する
+    pub preview_zoom_accum: f32,
 
     // --- アンドゥ/リドゥ ---
     pub undo_stack: Vec<Snapshot>,
@@ -362,6 +372,8 @@ impl AppState {
             window_size:         [1400.0, 720.0],
             preview_generating:  false,
             show_bg_color_window: false,
+            preview_zoom_idx:    ZOOM_DEFAULT_IDX,
+            preview_zoom_accum:  0.0,
             preview_text_mode: PreviewTextMode::A,
             overlay_mode:      String::new(),
             canvas_bg:         CanvasBg::Checker,
