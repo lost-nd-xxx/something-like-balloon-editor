@@ -480,7 +480,7 @@ impl BalloonEditorApp {
             self.state.pending_confirm = Some(ConfirmRequest {
                 title: "削除確認".into(),
                 message: format!(
-                    "「{}」は画像ファイルを持たず、レイアウト定義（files.txt）のみに存在します。
+                    "「{}」は画像ファイルを持たず、レイアウト定義(files.txt)のみに存在します。
 
 files.txt の定義を削除しますか？",
                     name
@@ -494,8 +494,8 @@ files.txt の定義を削除しますか？",
 
         // 付随ファイル（ファイル名 + 種別の説明）を列挙する
         let mut extras = Vec::new();
-        if has_pna { extras.push(format!("{}.pna（アルファチャンネル画像）", stem)); }
-        if has_cfg { extras.push(format!("{}s.txt（個別設定ファイル）", stem)); }
+        if has_pna { extras.push(format!("{}.pna(アルファチャンネル画像)", stem)); }
+        if has_cfg { extras.push(format!("{}s.txt(個別設定ファイル)", stem)); }
         let desc = if extras.is_empty() {
             format!("「{}」をゴミ箱に移動しますか？", name)
         } else {
@@ -1525,7 +1525,7 @@ impl eframe::App for BalloonEditorApp {
                     };
 
                     if !name_trimmed.is_empty() && !name_valid {
-                        ui.colored_label(egui::Color32::from_rgb(220, 80, 80), "[!] 使用できない文字が含まれています（/ \\ .. や絶対パスは不可）。");
+                        ui.colored_label(egui::Color32::from_rgb(220, 80, 80), "[!] 使用できない文字が含まれています(/ \\ .. や絶対パスは不可)。");
                     } else if exists {
                         ui.colored_label(egui::Color32::from_rgb(220, 80, 80), "[!] 既に存在するプロジェクト名です。保存すると削除して再作成されます。");
                     }
@@ -1589,7 +1589,7 @@ impl eframe::App for BalloonEditorApp {
                     if name_trimmed.is_empty() {
                         self.state.import_folder_warning = String::new();
                     } else if !name_valid {
-                        self.state.import_folder_warning = "[!] 使用できない文字が含まれています（/ \\ .. や絶対パスは不可）。".to_string();
+                        self.state.import_folder_warning = "[!] 使用できない文字が含まれています(/ \\ .. や絶対パスは不可)。".to_string();
                     } else if already_exists {
                         self.state.import_folder_warning = "[!] 既に存在するプロジェクト名です。作成すると削除して再作成されます。".to_string();
                     } else {
@@ -1700,7 +1700,7 @@ impl eframe::App for BalloonEditorApp {
                     if name_trimmed.is_empty() || is_same {
                         self.state.save_as_project_warning = String::new();
                     } else if !name_valid {
-                        self.state.save_as_project_warning = "[!] 使用できない文字が含まれています（/ \\ .. や絶対パスは不可）。".to_string();
+                        self.state.save_as_project_warning = "[!] 使用できない文字が含まれています(/ \\ .. や絶対パスは不可)。".to_string();
                     } else if already_exists {
                         self.state.save_as_project_warning = "[!] 既に存在するプロジェクト名です。削除して再作成されます。".to_string();
                     } else {
@@ -1777,8 +1777,8 @@ impl eframe::App for BalloonEditorApp {
                         // 種別ラジオボタン
                         ui.horizontal(|ui| {
                             ui.label("種別:");
-                            ui.radio_value(&mut self.state.rename_balloon_is_c, false, "通常バルーン（s/k/p系）");
-                            ui.radio_value(&mut self.state.rename_balloon_is_c, true,  "入力ボックス（c系）");
+                            ui.radio_value(&mut self.state.rename_balloon_is_c, false, "通常バルーン(s/k/p系)");
+                            ui.radio_value(&mut self.state.rename_balloon_is_c, true,  "入力ボックス(c系)");
                         });
 
                         ui.add_space(4.0);

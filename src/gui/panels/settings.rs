@@ -49,7 +49,7 @@ fn show_png_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context)
         .default_open(true)
         .show(ui, |ui| {
             ui.label(
-                egui::RichText::new("操作するとファイルが直接書き換わります（元に戻すには逆の操作）")
+                egui::RichText::new("操作するとファイルが直接書き換わります(元に戻すには逆の操作)")
                     .color(ui.visuals().text_color())
                     .small(),
             );
