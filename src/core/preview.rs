@@ -1100,16 +1100,20 @@ fn draw_sample_text(
     let anchor_sel_color = if anchor_state     == 0 { font_color } else { resolve_color("anchor.font.color",           Rgb(0,0,255)) };
     let anchor_vis_color = if anchor_vis_state == 0 { font_color } else { resolve_color("anchor.visited.font.color",   Rgb(170,0,170)) };
 
-    // pen/brush色: RasterOp(2)のときのみ使用。Simple(1)のときはfont.colorを使用（仮表示）
-    let cursor_brush     = if cursor_state     == 1 { choice_sel_color } else { get_color(parsed, "cursor.brush.color").unwrap_or(Rgb(0,0,255)) };
+    // pen/brush色:
+    //   RasterOp(2) … descript の pen/brush 指定をそのまま使う
+    //   Simple(1)   … SSP の実装に合わせ、塗りは (127,127,0) 固定、枠・下線は文字色
+    //                 （塗りに文字色を使うと文字が背景に埋もれて読めなくなる）
+    const SIMPLE_BRUSH: Rgb = Rgb(127, 127, 0);
+    let cursor_brush     = if cursor_state     == 1 { SIMPLE_BRUSH } else { get_color(parsed, "cursor.brush.color").unwrap_or(Rgb(0,0,255)) };
     let cursor_pen       = if cursor_state     == 1 { choice_sel_color } else { get_color(parsed, "cursor.pen.color").unwrap_or(Rgb(0,0,0)) };
-    let anchor_brush     = if anchor_state     == 1 { anchor_sel_color } else { get_color(parsed, "anchor.brush.color").unwrap_or(Rgb(0,0,0)) };
+    let anchor_brush     = if anchor_state     == 1 { SIMPLE_BRUSH } else { get_color(parsed, "anchor.brush.color").unwrap_or(Rgb(0,0,0)) };
     let anchor_pen       = if anchor_state     == 1 { anchor_sel_color } else { get_color(parsed, "anchor.pen.color").unwrap_or(Rgb(127,127,0)) };
-    let anchor_vis_brush = if anchor_vis_state == 1 { anchor_vis_color } else { get_color(parsed, "anchor.visited.brush.color").unwrap_or(Rgb(0,0,0)) };
+    let anchor_vis_brush = if anchor_vis_state == 1 { SIMPLE_BRUSH } else { get_color(parsed, "anchor.visited.brush.color").unwrap_or(Rgb(0,0,0)) };
     let anchor_vis_pen   = if anchor_vis_state == 1 { anchor_vis_color } else { get_color(parsed, "anchor.visited.pen.color").unwrap_or(Rgb(0,0,0)) };
-    let cursor_ns_brush  = if cursor_ns_state  == 1 { choice_color     } else { get_color(parsed, "cursor.notselect.brush.color").unwrap_or(Rgb(0,0,0)) };
+    let cursor_ns_brush  = if cursor_ns_state  == 1 { SIMPLE_BRUSH } else { get_color(parsed, "cursor.notselect.brush.color").unwrap_or(Rgb(0,0,0)) };
     let cursor_ns_pen    = if cursor_ns_state  == 1 { choice_color     } else { get_color(parsed, "cursor.notselect.pen.color").unwrap_or(Rgb(0,0,0)) };
-    let anchor_ns_brush  = if anchor_ns_state  == 1 { anchor_color     } else { get_color(parsed, "anchor.notselect.brush.color").unwrap_or(Rgb(0,0,0)) };
+    let anchor_ns_brush  = if anchor_ns_state  == 1 { SIMPLE_BRUSH } else { get_color(parsed, "anchor.notselect.brush.color").unwrap_or(Rgb(0,0,0)) };
     let anchor_ns_pen    = if anchor_ns_state  == 1 { anchor_color     } else { get_color(parsed, "anchor.notselect.pen.color").unwrap_or(Rgb(0,0,0)) };
 
     // style キーのデフォルト値（field_def と一致させる）
