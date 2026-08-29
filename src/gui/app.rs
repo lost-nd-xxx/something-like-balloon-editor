@@ -931,7 +931,8 @@ files.txt の定義を削除しますか？",
 
         // アプリが合成・生成しない素材ファイル（thumbnail.png/.pnr、cursor画像など）を
         // プロジェクトフォルダから物理コピーする。
-        // 既に出力済みのファイル名・テキスト類・profile/配下・.pna は対象外。
+        // 既に出力済みのファイル名・テキスト類・profile/配下は対象外。
+        // .pna も原則対象外だが、thumbnail など SSP 参照名のものはペア維持のため出力する。
         {
             // 出力済みファイル名の集合を作る
             let mut already: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -947,6 +948,25 @@ files.txt の定義を削除しますか？",
             for cfg in self.state.individual_texts.keys() {
                 already.insert(cfg.to_lowercase());
             }
+            // slbe_files.txt のレイヤー定義に現れる合成材料は最終出力物ではないので除外する。
+            // ただし SSP が直接参照する名前（balloon*, arrow* 等）は素材として残す。
+            for layers in self.state.balloon_layout.values() {
+                for (fname, _) in layers {
+                    let stem = std::path::Path::new(fname)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
+                    if crate::gui::loader::is_reserved_image_stem(stem) { continue; }
+                    already.insert(fname.to_lowercase());
+                    // 24bit PNG に付随する .pna も併せて除外する
+                    already.insert(
+                        std::path::Path::new(fname)
+                            .with_extension("pna")
+                            .to_string_lossy()
+                            .to_lowercase(),
+                    );
+                }
+            }
 
             if let Ok(entries) = std::fs::read_dir(&ad) {
                 for entry in entries.flatten() {
@@ -957,12 +977,18 @@ files.txt の定義を削除しますか？",
                         None => continue,
                     };
                     let fname_lower = fname.to_lowercase();
-                    // 既に出力済み・テキスト・.pna は対象外
+                    let stem = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+                    let is_reserved = crate::gui::loader::is_reserved_image_stem(stem);
+                    // 既に出力済み・テキストは対象外
                     if already.contains(&fname_lower) { continue; }
                     if fname_lower.ends_with(".txt") { continue; }
-                    if fname_lower.ends_with(".pna") { continue; }
+                    // .pna は通常アプリが合成時に取り込むため単体では出力しない。
+                    // ただし thumbnail のような SSP 参照名は例外で、
+                    // SSP はサムネイルの半透明を 24bit PNG + .pna でしか表現できないため
+                    // ペアのまま出力する必要がある。
+                    if fname_lower.ends_with(".pna") && !is_reserved { continue; }
                     // 画像系（png/pnr/jpg等）のみコピー対象
-                    let is_image = [".png", ".pnr", ".jpg", ".jpeg", ".bmp"]
+                    let is_image = [".png", ".pnr", ".jpg", ".jpeg", ".bmp", ".pna"]
                         .iter().any(|ext| fname_lower.ends_with(ext));
                     if !is_image { continue; }
                     let dest = output_dir.join(&fname);
