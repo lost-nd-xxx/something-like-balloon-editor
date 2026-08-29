@@ -39,9 +39,12 @@ overlay_outside_balloon,1
 // 画像パーツをバルーンの外にも描画できるようにするかどうか
 // 1で有効、0で無効
 
-origin.x,0
-origin.y,0
+//origin.x,0
+//origin.y,0
 // バルーン内の文字開始位置のXY座標
+// 通常は指定せず validrect の定義に任せる。
+// 0 は「未指定」ではなく画像左上からの絶対座標として扱われるため、
+// 縦書き（vertical,1）にすると1列目の右端が x=0 となり文字が画像の外へ出る。
 
 validrect.left,28
 validrect.top,14

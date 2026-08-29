@@ -599,11 +599,75 @@ fn measure_text(font_name: &str, font: Option<&fontdue::Font>, text: &str, size_
 // ValidRect
 // ---------------------------------------------------------------------------
 
+/// origin.x/y が指定されているか（キーが存在するか）。
+///
+/// オーバーレイの開始点マーカーを出すかどうかの判定に使う。
+/// 値が validrect の外側でも「指定はされている」とみなす
+/// （実際の描画位置は `resolve_origin` が validrect 内へ丸める）。
+fn has_explicit_origin(parsed: &HashMap<String, String>) -> bool {
+    parsed.contains_key("origin.x") || parsed.contains_key("origin.y")
+}
+
+/// origin が「起点と反対側」へ validrect を外れているか。
+///
+/// `resolve_origin` が丸めるのは起点側の端だけなので、反対側へ外れた指定は
+/// そのまま使われる。この場合テキストは validrect の外に描かれるか、
+/// 画像の外へ出て見えなくなる（SSP 実機と同じ挙動）。素材制作中に原因が
+/// 分かるよう、オーバーレイで警告するために使う。
+///
+/// 縦書きで `origin.x,0` を指定した場合が典型（1列目の右端が x=0 になり、
+/// 列が左へ進んで画像外に出る）。
+fn origin_escapes_validrect(
+    parsed: &HashMap<String, String>,
+    vr: &ValidRect,
+    w: i32,
+    h: i32,
+    vertical: bool,
+) -> bool {
+    let escaped_x = match parsed.get("origin.x") {
+        // 縦書きは右→左へ送るので left より左、横書きは左→右なので right より右
+        Some(raw) => {
+            let v = pos_str(raw, w);
+            if vertical { v < vr.left } else { v > vr.right }
+        }
+        None => false,
+    };
+    // y は縦横とも上→下へ送る
+    let escaped_y = parsed
+        .get("origin.y")
+        .map(|raw| pos_str(raw, h) > vr.bottom)
+        .unwrap_or(false);
+    escaped_x || escaped_y
+}
+
 /// origin.x/y（テキスト開始位置）を解決する。
 ///
-/// SSP 2.8.84 で実機確認済み: 横書き・縦書きとも**画像基準**の `pos_str` 規則
-/// （正値=左/上起点、負値=右/下起点）。validrect 基準ではない。
-/// 未指定時は validrect の定義に従う（横書き=左上、縦書き=右上）。
+/// 値は**画像基準**の `pos_str` 規則（正値=左/上起点、負値=右/下起点）で読む。
+/// validrect への加算ではない。未指定時は validrect の定義に従う
+/// （横書き=左上、縦書き=右上）。
+///
+/// 解決した値は validrect の「起点側の端」だけを下限/上限として丸める。
+/// 反対側へはみ出す指定は丸めず、そのまま使う（テキストは枠外・画像外に
+/// 描かれる）。SSP 2.8.84 実機で確認:
+///
+/// | 設定 | 実機 |
+/// |---|---|
+/// | 横書き `origin.x,10` / `validrect.left,28` | 28（丸め） |
+/// | 横書き `origin.x,470` / `validrect.right,-48`(=452) | 470 のまま |
+/// | 横書き `origin.y,5` / `validrect.top,14` | 14（丸め） |
+/// | 横書き `origin.y,190` / `validrect.bottom,-24`(=176) | 190 のまま |
+/// | 縦書き `origin.x,480` / `validrect.right,-48`(=452) | 452（丸め） |
+/// | 縦書き `origin.x,550` / 同上 | 452（丸め） |
+/// | 縦書き `origin.x,0` / 同上 | 0 のまま（列が画像外へ出て不可視） |
+///
+/// 丸められるのは、その軸の**字送り/行送りが始まる側**の端:
+///
+/// - `origin.y` は縦横とも上→下に送るので下限 `validrect.top`
+/// - `origin.x` は横書きで左→右に字を送るので下限 `validrect.left`、
+///   縦書きは右→左に列を送るので上限 `validrect.right`
+///
+/// 縦書きの `origin.x,0` が不可視になるのは実機と同じ挙動。反対側の端まで
+/// 引き寄せてはならない。
 ///
 /// 戻り値の x は、横書きでは行の左端、縦書きでは1列目の右端を意味する。
 fn resolve_origin(
@@ -613,14 +677,18 @@ fn resolve_origin(
     h: i32,
     vertical: bool,
 ) -> (i32, i32) {
-    let x = match parsed.get("origin.x") {
+    let raw_x = match parsed.get("origin.x") {
         Some(raw) => pos_str(raw, w),
         None => if vertical { vr.right } else { vr.left },
     };
-    let y = match parsed.get("origin.y") {
+    let raw_y = match parsed.get("origin.y") {
         Some(raw) => pos_str(raw, h),
         None => vr.top,
     };
+
+    // 起点側の端だけを丸める（反対側へのはみ出しは丸めない）
+    let x = if vertical { raw_x.min(vr.right) } else { raw_x.max(vr.left) };
+    let y = raw_y.max(vr.top);
     (x, y)
 }
 
@@ -1474,9 +1542,26 @@ fn draw_overlay(
 
         // origin.x/y が指定されているとき、テキスト実開始点を緑の十字で表示
         // （縦書き時の x は「1列目の右端」。算出は本体と同じ resolve_origin に揃える）
-        if parsed.contains_key("origin.x") || parsed.contains_key("origin.y") {
+        if has_explicit_origin(parsed) {
             let (tx, ty) = resolve_origin(parsed, &vr, iw, ih, vertical);
-            draw_cross(img, tx, ty, Rgb(0, 200, 0), Rgb(0, 200, 0));
+
+            if origin_escapes_validrect(parsed, &vr, iw, ih, vertical) {
+                // 送り先方向へ validrect を外れている: テキストが枠外・画像外に
+                // 描かれる（SSP 実機と同じ挙動）。橙の十字と、validrect からの
+                // 距離を示す破線で警告する。
+                let orange = Rgb(255, 140, 0);
+                let dark   = Rgb(140, 70, 0);
+                if vertical {
+                    // 右→左へ送るので、左端から開始点まで
+                    draw_hline_dashed(img, ty.clamp(0, ih - 1), tx.min(l), l, orange, dark);
+                } else {
+                    // 左→右へ送るので、右端から開始点まで
+                    draw_hline_dashed(img, ty.clamp(0, ih - 1), r, tx.max(r), orange, dark);
+                }
+                draw_cross(img, tx, ty, orange, dark);
+            } else {
+                draw_cross(img, tx, ty, Rgb(0, 200, 0), Rgb(0, 200, 0));
+            }
         }
     }
 }
@@ -1604,3 +1689,180 @@ fn draw_cross(img: &mut RgbaImage, cx: i32, cy: i32, outer: Rgb, inner: Rgb) {
 }
 
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parsed(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    /// 未指定時は横書き=左上、縦書き=右上（UKADOC の既定）。
+    #[test]
+    fn origin_absent_uses_validrect() {
+        let p = parsed(&[
+            ("validrect.left", "28"), ("validrect.top", "14"),
+            ("validrect.right", "-48"), ("validrect.bottom", "-24"),
+        ]);
+        let (w, h) = (500, 200);
+        let vr = build_valid_rect(&p, w, h);
+
+        assert_eq!(resolve_origin(&p, &vr, w, h, false), (vr.left, vr.top));
+        assert_eq!(resolve_origin(&p, &vr, w, h, true), (vr.right, vr.top));
+        assert!(!has_explicit_origin(&p));
+    }
+
+    /// validrect の内側なら指定値がそのまま使われる（validrect への加算ではない）。
+    #[test]
+    fn origin_inside_validrect_is_image_based() {
+        let p = parsed(&[
+            ("origin.x", "100"), ("origin.y", "-30"),
+            ("validrect.left", "28"), ("validrect.top", "14"),
+            ("validrect.right", "-48"), ("validrect.bottom", "-24"),
+        ]);
+        let (w, h) = (500, 200);
+        let vr = build_valid_rect(&p, w, h);
+
+        // validrect.left(28) を足した 128 ではなく 100
+        assert_eq!(resolve_origin(&p, &vr, w, h, false), (100, h - 30));
+        assert!(has_explicit_origin(&p));
+    }
+
+    /// 起点側の端は validrect の内側へ丸められる（SSP 2.8.84 実機で確認）。
+    ///
+    /// - 横書き `origin.x,10` / `validrect.left,28` → 28
+    /// - 横書き `origin.y,5` / `validrect.top,14` → 14
+    /// - 縦書き `origin.x,480` / `validrect.right,-48`(=452) → 452
+    /// - 縦書き `origin.x,550` / 同上 → 452
+    #[test]
+    fn origin_at_start_edge_is_clamped() {
+        let (w, h) = (500, 200);
+        let base = [
+            ("validrect.left", "28"), ("validrect.top", "14"),
+            ("validrect.right", "-48"), ("validrect.bottom", "-24"),
+        ];
+        let with_kv = |k: &'static str, v: &'static str| {
+            let mut kv = base.to_vec();
+            kv.push((k, v));
+            parsed(&kv)
+        };
+
+        // 横書き x: 左→右へ字を送るので下限は validrect.left
+        let p = with_kv("origin.x", "10");
+        let vr = build_valid_rect(&p, w, h);
+        assert_eq!(resolve_origin(&p, &vr, w, h, false).0, vr.left);
+
+        // y: 縦横とも上→下へ送るので下限は validrect.top
+        let p = with_kv("origin.y", "5");
+        let vr = build_valid_rect(&p, w, h);
+        assert_eq!(resolve_origin(&p, &vr, w, h, false).1, vr.top);
+        assert_eq!(resolve_origin(&p, &vr, w, h, true).1, vr.top);
+
+        // 縦書き x: 右→左へ列を送るので上限は validrect.right
+        for x in ["480", "550"] {
+            let p = with_kv("origin.x", x);
+            let vr = build_valid_rect(&p, w, h);
+            assert_eq!(resolve_origin(&p, &vr, w, h, true).0, vr.right);
+        }
+    }
+
+    /// 起点と反対側へはみ出す指定は丸めない（SSP 2.8.84 実機で確認）。
+    ///
+    /// テキストは validrect の外や画像の外に描かれるが、これが実機の挙動。
+    ///
+    /// - 横書き `origin.x,470` / `validrect.right,-48`(=452) → 470 のまま
+    /// - 横書き `origin.y,190` / `validrect.bottom,-24`(=176) → 190 のまま
+    /// - 縦書き `origin.x,0` → 0 のまま（列が画像外へ出て不可視）
+    #[test]
+    fn origin_past_far_edge_is_not_clamped() {
+        let (w, h) = (500, 200);
+        let base = [
+            ("validrect.left", "28"), ("validrect.top", "14"),
+            ("validrect.right", "-48"), ("validrect.bottom", "-24"),
+        ];
+        let with_kv = |k: &'static str, v: &'static str| {
+            let mut kv = base.to_vec();
+            kv.push((k, v));
+            parsed(&kv)
+        };
+
+        // 横書き: 右へはみ出しても丸めない
+        let p = with_kv("origin.x", "470");
+        let vr = build_valid_rect(&p, w, h);
+        assert_eq!(resolve_origin(&p, &vr, w, h, false).0, 470);
+
+        // 下へはみ出しても丸めない
+        let p = with_kv("origin.y", "190");
+        let vr = build_valid_rect(&p, w, h);
+        assert_eq!(resolve_origin(&p, &vr, w, h, false).1, 190);
+        assert_eq!(resolve_origin(&p, &vr, w, h, true).1, 190);
+
+        // 縦書き: 左へはみ出しても丸めない（不可視になるが実機と同じ）
+        let p = with_kv("origin.x", "0");
+        let vr = build_valid_rect(&p, w, h);
+        assert_eq!(resolve_origin(&p, &vr, w, h, true).0, 0);
+        // 同じ値でも横書きなら起点側なので丸められる
+        assert_eq!(resolve_origin(&p, &vr, w, h, false).0, vr.left);
+    }
+
+    /// 負値は画像の右下基準に解決される（`pos_str` 規則）。丸めとは独立。
+    ///
+    /// 横書き `origin.x,-400` / 画像幅 500 → 100（validrect 内なので丸めなし）
+    #[test]
+    fn origin_negative_is_image_relative() {
+        let p = parsed(&[
+            ("origin.x", "-400"),
+            ("validrect.left", "28"), ("validrect.top", "14"),
+            ("validrect.right", "-48"), ("validrect.bottom", "-24"),
+        ]);
+        let (w, h) = (500, 200);
+        let vr = build_valid_rect(&p, w, h);
+        assert_eq!(resolve_origin(&p, &vr, w, h, false).0, 100);
+    }
+
+    /// origin が起点と反対側へ外れたら警告対象と判定する。
+    #[test]
+    fn origin_escape_is_detected() {
+        let (w, h) = (500, 200);
+        let base = [
+            ("validrect.left", "28"), ("validrect.top", "14"),
+            ("validrect.right", "-48"), ("validrect.bottom", "-24"),
+        ];
+        let with_kv = |k: &'static str, v: &'static str| {
+            let mut kv = base.to_vec();
+            kv.push((k, v));
+            parsed(&kv)
+        };
+
+        // 縦書きで 0: 列が画像左外へ出る → 警告
+        let p = with_kv("origin.x", "0");
+        let vr = build_valid_rect(&p, w, h);
+        assert!(origin_escapes_validrect(&p, &vr, w, h, true));
+        // 同じ値でも横書きなら起点側なので丸められる → 警告しない
+        assert!(!origin_escapes_validrect(&p, &vr, w, h, false));
+
+        // 横書きで validrect.right より右 → 警告
+        let p = with_kv("origin.x", "470");
+        let vr = build_valid_rect(&p, w, h);
+        assert!(origin_escapes_validrect(&p, &vr, w, h, false));
+        // 縦書きなら起点側なので丸められる → 警告しない
+        assert!(!origin_escapes_validrect(&p, &vr, w, h, true));
+
+        // validrect.bottom より下 → 縦横とも警告
+        let p = with_kv("origin.y", "190");
+        let vr = build_valid_rect(&p, w, h);
+        assert!(origin_escapes_validrect(&p, &vr, w, h, false));
+        assert!(origin_escapes_validrect(&p, &vr, w, h, true));
+
+        // 範囲内・未指定は警告しない
+        let p = with_kv("origin.x", "100");
+        let vr = build_valid_rect(&p, w, h);
+        assert!(!origin_escapes_validrect(&p, &vr, w, h, false));
+        assert!(!origin_escapes_validrect(&p, &vr, w, h, true));
+
+        let p = parsed(&base);
+        let vr = build_valid_rect(&p, w, h);
+        assert!(!origin_escapes_validrect(&p, &vr, w, h, true));
+    }
+}
