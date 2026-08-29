@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use image::{RgbaImage, Rgba};
 use crate::core::color::Rgb;
-use crate::core::descript::{parse_descript, get_color_from_descript, pos_str};
+use crate::core::descript::{parse_descript, get_color_from_descript, pos_str, get_aliased};
 use crate::core::gdi_text;
 
 #[cfg(windows)]
@@ -45,7 +45,7 @@ impl Sess {
         px: i32, py: i32,
         color: Rgb,
         shadow: Option<(Rgb, bool)>,
-        max_x: Option<i32>,
+        max_x: Option<gdi_text::TextLimit>,
         size_px: f32,
     ) -> bool {
         // 縦書きセッションのフォントでは横書き描画できない → 単発GDI（横書き）へフォールバック
@@ -56,7 +56,7 @@ impl Sess {
         #[cfg(windows)]
         if let Some(sess) = &mut self.inner {
             let clipped = match max_x {
-                Some(mx) => sess.clip_to_max(text, px, mx),
+                Some(mx) => sess.clip_to_max(text, px, mx.pos, mx.include_straddling),
                 None => text.to_string(),
             };
             let text = clipped.as_str();
@@ -97,7 +97,7 @@ impl Sess {
         right_x: i32, top_y: i32,
         color: Rgb,
         shadow: Option<(Rgb, bool)>,
-        max_y: Option<i32>,
+        max_y: Option<gdi_text::TextLimit>,
         size_px: f32,
     ) -> bool {
         if !self.vertical { return false; }
@@ -106,7 +106,7 @@ impl Sess {
         #[cfg(windows)]
         if let Some(sess) = &mut self.inner {
             let clipped = match max_y {
-                Some(my) => sess.clip_to_max(text, top_y, my),
+                Some(my) => sess.clip_to_max(text, top_y, my.pos, my.include_straddling),
                 None => text.to_string(),
             };
             let text = clipped.as_str();
@@ -483,7 +483,7 @@ fn draw_text_on(
     size_px: f32,
     color: Rgb,
     shadow: Option<(Rgb, bool)>,
-    max_x: Option<i32>,
+    max_x: Option<gdi_text::TextLimit>,
     no_aa: bool,
     sess: &mut Sess,
 ) {
@@ -496,7 +496,7 @@ fn draw_text_on(
         return;
     }
     let Some(font) = font else { return; };
-    draw_text_fontdue(img, font, text, px, py, size_px, color, shadow, max_x);
+    draw_text_fontdue(img, font, text, px, py, size_px, color, shadow, max_x.map(|m| m.pos));
 }
 
 /// 縦書きテキスト描画（セッション → 単発GDI の2段）。
@@ -514,7 +514,7 @@ fn draw_text_on_vertical(
     size_px: f32,
     color: Rgb,
     shadow: Option<(Rgb, bool)>,
-    max_y: Option<i32>,
+    max_y: Option<gdi_text::TextLimit>,
     no_aa: bool,
     sess: &mut Sess,
 ) {
@@ -598,6 +598,31 @@ fn measure_text(font_name: &str, font: Option<&fontdue::Font>, text: &str, size_
 // ---------------------------------------------------------------------------
 // ValidRect
 // ---------------------------------------------------------------------------
+
+/// origin.x/y（テキスト開始位置）を解決する。
+///
+/// SSP 2.8.84 で実機確認済み: 横書き・縦書きとも**画像基準**の `pos_str` 規則
+/// （正値=左/上起点、負値=右/下起点）。validrect 基準ではない。
+/// 未指定時は validrect の定義に従う（横書き=左上、縦書き=右上）。
+///
+/// 戻り値の x は、横書きでは行の左端、縦書きでは1列目の右端を意味する。
+fn resolve_origin(
+    parsed: &HashMap<String, String>,
+    vr: &ValidRect,
+    w: i32,
+    h: i32,
+    vertical: bool,
+) -> (i32, i32) {
+    let x = match parsed.get("origin.x") {
+        Some(raw) => pos_str(raw, w),
+        None => if vertical { vr.right } else { vr.left },
+    };
+    let y = match parsed.get("origin.y") {
+        Some(raw) => pos_str(raw, h),
+        None => vr.top,
+    };
+    (x, y)
+}
 
 fn build_valid_rect(parsed: &HashMap<String, String>, w: i32, h: i32) -> ValidRect {
     ValidRect {
@@ -711,8 +736,12 @@ fn draw_parts(
     }
 
     // SSTPメッセージ
-    let ssx = pos_str(parsed.get("sstpmessage.x").map(|s| s.as_str()).unwrap_or("10"), iw);
-    let ssy = pos_str(parsed.get("sstpmessage.y").map(|s| s.as_str()).unwrap_or("-5"), ih);
+    let vertical = parsed.get("vertical").map(|s| s.trim() == "1").unwrap_or(false);
+    // 未指定時の既定位置は画像サイズ非依存の固定値（SSP 2.8.84 で実機確認）。
+    //   横書き: x=左端から40 / y=下から15   縦書き: x=左端から16 / y=上から40
+    let (def_x, def_y) = if vertical { ("16", "40") } else { ("40", "-15") };
+    let ssx = pos_str(parsed.get("sstpmessage.x").map(|s| s.as_str()).unwrap_or(def_x), iw);
+    let ssy = pos_str(parsed.get("sstpmessage.y").map(|s| s.as_str()).unwrap_or(def_y), ih);
     let sstp_fh: f32 = clamp_font_height(
         parsed.get("sstpmessage.font.height").and_then(|s| s.parse().ok()).unwrap_or(10.0), 10.0);
     let sstp_col = get_color(parsed, "sstpmessage.font.color")
@@ -725,17 +754,34 @@ fn draw_parts(
     let sstp_leading = gdi_text::font_internal_leading(
         sstp_font_name.split(',').next().unwrap_or(&sstp_font_name).trim(), sstp_fh, sstp_no_aa);
     // 縦書き時は SSTP 送信元表示も縦書きになる（UKADOC vertical の項）。
-    // SSP 実動作: 指定座標を基準点として下方向に描画される（座標 = 列右端・先頭上端）
-    let vertical = parsed.get("vertical").map(|s| s.trim() == "1").unwrap_or(false);
+    // SSP 実動作: sstpmessage.y が描画開始位置（列右端・先頭上端）。
+    // sstpmessage.x / .y が描画開始位置、.xr / .yb が描画終了位置（打ち切り）。
+    // 開始と終了は排他ではなく「始点と終点」の関係で、終了位置を超えた分は
+    // 文字単位で切り捨てられる（折り返さない）。終了 < 開始 なら何も描画されない。
+    // 終了位置を省略した場合は画像の端まで（validrect ではない）。
+    // 横書きは xr のみ、縦書きは yb のみが使われる。いずれも SSP 2.8.84 で実機確認済み。
     if vertical {
-        draw_text_on_vertical(img, &sstp_font_name, font, "SSTPメッセージ", ssx, ssy, sstp_fh, sstp_col, None, None, sstp_no_aa, sess);
+        let sstp_max_y = Some(gdi_text::TextLimit::clip(match parsed.get("sstpmessage.yb") {
+            Some(raw) => pos_str(raw, ih),
+            None => ih,
+        }));
+        draw_text_on_vertical(img, &sstp_font_name, font, "SSTPメッセージ", ssx, ssy, sstp_fh, sstp_col, None, sstp_max_y, sstp_no_aa, sess);
     } else {
-        draw_text_on(img, &sstp_font_name, font, "SSTPメッセージ", ssx, ssy - sstp_leading / 2, sstp_fh, sstp_col, None, None, sstp_no_aa, sess);
+        let sstp_max_x = Some(gdi_text::TextLimit::clip(match parsed.get("sstpmessage.xr") {
+            Some(raw) => pos_str(raw, iw),
+            None => iw,
+        }));
+        draw_text_on(img, &sstp_font_name, font, "SSTPメッセージ", ssx, ssy - sstp_leading / 2, sstp_fh, sstp_col, None, sstp_max_x, sstp_no_aa, sess);
     }
 
     // カウンタ数値
-    let num_xr: i32 = parsed.get("number.xr").and_then(|s| s.parse().ok()).unwrap_or(-20);
-    let num_y   = pos_str(parsed.get("number.y").map(|s| s.as_str()).unwrap_or("-5"), ih);
+    // number.xr / number.x は完全に同一の別名（SSP 2.8.84 で実機確認）。
+    // 正値=左起点・負値=右端起点の pos_str 規則で、指定座標が数値の右端になる（右端揃え）。
+    let num_right = pos_str(
+        get_aliased(parsed, "number.xr").map(|s| s.as_str()).unwrap_or("-20"), iw);
+    // number.y / number.yb も同一の別名。横書きでは数値の上端、縦書きでは下端を指す。
+    let num_y = pos_str(
+        get_aliased(parsed, "number.y").map(|s| s.as_str()).unwrap_or("-5"), ih);
     let num_fh: f32 = clamp_font_height(
         parsed.get("number.font.height").and_then(|s| s.parse().ok()).unwrap_or(10.0), 10.0);
     let num_col = get_color(parsed, "number.font.color")
@@ -748,11 +794,11 @@ fn draw_parts(
     let tw = measure_text(&num_font_name, font, "999", num_fh, num_no_aa, sess);
     if vertical {
         // SSP 実動作: 指定座標と文字列末端が一致するように描画される
-        // （横書きの右端一致と同型。縦書きでは下端 = number.y、列右端 = iw + number.xr）
+        // （横書きの右端一致と同型。縦書きでは下端 = number.y、列右端 = number.xr）
         let num_top = num_y - tw as i32;
-        draw_text_on_vertical(img, &num_font_name, font, "999", iw + num_xr, num_top, num_fh, num_col, None, None, num_no_aa, sess);
+        draw_text_on_vertical(img, &num_font_name, font, "999", num_right, num_top, num_fh, num_col, None, None, num_no_aa, sess);
     } else {
-        let num_x = iw + num_xr - tw as i32;
+        let num_x = num_right - tw as i32;
         let num_leading = gdi_text::font_internal_leading(
             num_font_name.split(',').next().unwrap_or(&num_font_name).trim(), num_fh, num_no_aa);
         draw_text_on(img, &num_font_name, font, "999", num_x, num_y - num_leading / 2, num_fh, num_col, None, None, num_no_aa, sess);
@@ -1185,16 +1231,14 @@ fn draw_sample_text(
         ("アンカー(訪問済み)", 6),
     ];
 
-    // origin.x/y: テキスト開始位置のオフセット
-    // 横書き: validrect 左上に加算。text_x=行左端（固定）、text_y=行上端（下へ送り）
-    // 縦書き: origin.x は「1列目の右端」＝ validrect.right 基準。
-    //         col_x=列右端（左へ送り）、start_y=字送り開始位置（固定）
-    let origin_x: i32 = parsed.get("origin.x").and_then(|s| s.parse().ok()).unwrap_or(0);
-    let origin_y: i32 = parsed.get("origin.y").and_then(|s| s.parse().ok()).unwrap_or(0);
-    let text_x = vr.left + origin_x;
-    let mut text_y = vr.top + origin_y;
-    let mut col_x = vr.right + origin_x;
-    let start_y = vr.top + origin_y;
+    // origin.x/y: テキスト開始位置（画像基準の pos_str 規則。resolve_origin を参照）
+    // 横書き: text_x=行左端（固定）、text_y=行上端（下へ送り）
+    // 縦書き: col_x=1列目の右端（左へ送り）、start_y=字送り開始位置（固定）
+    let (origin_x, origin_y) = resolve_origin(parsed, vr, iw, img.height() as i32, vertical);
+    let text_x = origin_x;
+    let mut text_y = origin_y;
+    let mut col_x = origin_x;
+    let start_y = origin_y;
 
     // サンプルテキスト行頭マーカー（UKADOC仕様）
     // s系: markers.png → marker.png → sstp.png
@@ -1308,7 +1352,7 @@ fn draw_sample_text(
             // テキスト描画: leading（@フォントでは列の右側に来る）を左右均等に振り分けて
             // 厚み方向の中央に配置
             let text_draw_x = col_x + leading / 2;
-            draw_text_on_vertical(img, font_name, font, label, text_draw_x, ty, font_height, txt_color, line_shadow, Some(wrap_y), no_aa, sess);
+            draw_text_on_vertical(img, font_name, font, label, text_draw_x, ty, font_height, txt_color, line_shadow, Some(gdi_text::TextLimit::wrap(wrap_y)), no_aa, sess);
         } else {
             // ---- 横書き: 1行 = 1サンプル。行上端 text_y から下へ送る ----
             // marker を先頭に貼る（2行目のみ）：フォント行の縦中央に合わせる
@@ -1341,7 +1385,7 @@ fn draw_sample_text(
 
             // テキスト描画: leading を上下均等に振り分けて font_height 内で垂直中央に配置
             let text_draw_y = text_y - leading / 2;
-            let clip = Some(wrap_x);
+            let clip = Some(gdi_text::TextLimit::wrap(wrap_x));
             draw_text_on(img, font_name, font, label, tx, text_draw_y, font_height, txt_color, line_shadow, clip, no_aa, sess);
         }
 
@@ -1428,13 +1472,10 @@ fn draw_overlay(
             }
         }
 
-        // origin.x/y が 0 以外のとき、テキスト実開始点を緑の十字で表示
-        // 縦書き時の origin.x は「1列目の右端」＝ validrect.right 基準
-        let origin_x: i32 = parsed.get("origin.x").and_then(|s| s.parse().ok()).unwrap_or(0);
-        let origin_y: i32 = parsed.get("origin.y").and_then(|s| s.parse().ok()).unwrap_or(0);
-        if origin_x != 0 || origin_y != 0 {
-            let tx = if vertical { vr.right + origin_x } else { vr.left + origin_x };
-            let ty = vr.top + origin_y;
+        // origin.x/y が指定されているとき、テキスト実開始点を緑の十字で表示
+        // （縦書き時の x は「1列目の右端」。算出は本体と同じ resolve_origin に揃える）
+        if parsed.contains_key("origin.x") || parsed.contains_key("origin.y") {
+            let (tx, ty) = resolve_origin(parsed, &vr, iw, ih, vertical);
             draw_cross(img, tx, ty, Rgb(0, 200, 0), Rgb(0, 200, 0));
         }
     }

@@ -233,11 +233,21 @@ pub static ACCORDION_GROUPS: &[AccordionGroup] = &[
             fd!("clickwaitmarker.y", "クリック待ち Y",   FieldType::Int, &[], "-10"),
             fd!("sstpmarker.x",      "SSTPマーカー X",   FieldType::Int, &[], "5"),
             fd!("sstpmarker.y",      "SSTPマーカー Y",   FieldType::Int, &[], "-5"),
-            fd!("sstpmessage.x",     "SSTPメッセージ X", FieldType::Int, &[], "10"),
-            fd!("sstpmessage.y",     "SSTPメッセージ Y", FieldType::Int, &[], "-5"),
+            // 既定値は横書きの実機値（SSP 2.8.84 確認）。縦書き時の実機既定は x=16 / y=40 だが、
+            // ここは未入力時にUIへ出す参考値なので横書きの値で固定し、
+            // 実描画の既定値は core/preview.rs 側で縦横を切り替える。
+            fd!("sstpmessage.x",     "SSTPメッセージ X", FieldType::Int, &[], "40"),
+            fd!("sstpmessage.y",     "SSTPメッセージ Y", FieldType::Int, &[], "-15"),
+            // xr は横書き専用、yb は縦書き専用（それぞれ他方では無視される）。settings.rs で出し分ける。
+            // 初期値を負値にするのは、バルーンごとにサイズが違っても
+            // それぞれの画像の右端・下端付近に解決させるため（正値だと固定座標になり、
+            // 高さ・幅の異なるバルーンで描画範囲がずれる）。
+            // 0 は「左端/上端で打ち切り」＝文字が消える値なので初期値にしてはいけない。
+            fd!("sstpmessage.xr",    "SSTPメッセージ 終端X", FieldType::Int, &[], "-1"),
+            fd!("sstpmessage.yb",    "SSTPメッセージ 終端Y", FieldType::Int, &[], "-1"),
             fd!("onlinemarker.x",    "オンライン X",     FieldType::Int, &[], "20"),
             fd!("onlinemarker.y",    "オンライン Y",     FieldType::Int, &[], "-10"),
-            fd!("number.xr",         "カウンタ 右端X",   FieldType::Int, &[], "-20"),
+            fd!("number.xr",         "カウンタ X",       FieldType::Int, &[], "-20"),
             fd!("number.y",          "カウンタ Y",       FieldType::Int, &[], "-5"),
         ],
     },

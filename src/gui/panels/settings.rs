@@ -4,7 +4,8 @@ use crate::gui::field_def::{
     ACCORDION_GROUPS, DECORATION_GROUPS, FieldType, GroupVisibility,
 };
 use crate::core::descript::{
-    parse_descript, set_descript_value, get_color_from_descript, set_color_in_descript,
+    parse_descript, set_descript_value, set_descript_value_aliased, get_aliased,
+    get_color_from_descript, set_color_in_descript,
 };
 use crate::core::color::Rgb;
 use crate::gui::state::DragEditTarget;
@@ -191,6 +192,8 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
     // 表示可否フラグ
     let show_c  = is_c;
     let show_ks = !is_c;
+    // 縦書きか。フィールドごとに呼ぶと毎フレーム parse_descript が走るのでここで一度だけ解決する
+    let vertical = is_vertical_effective(app, &cfg_key);
 
     // テキスト方向（バルーン全体に効く設定のため、アコーディオン外に独立配置）
     if show_ks {
@@ -329,6 +332,10 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                                 }
                             }
 
+                            // 終端座標は縦横で使う軸が違う（他方は SSP に無視される）
+                            if field.key == "sstpmessage.yb" && !vertical { continue; }
+                            if field.key == "sstpmessage.xr" && vertical  { continue; }
+
                             // 影スタイルは対応する影色が none または未設定のときグレーアウト
                             let enabled = if field.key.ends_with(".shadowstyle") {
                                 let shadow_color_key = field.key.trim_end_matches("style").to_string() + "color.r";
@@ -341,17 +348,29 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                             } else {
                                 true
                             };
-                            // 縦書き時、arrow0/arrow1 は右/左スクロールの意味になる（UKADOC）
-                            let label = if is_vertical_effective(app, &cfg_key) {
+                            // 縦書きで意味の変わるフィールドはラベルを差し替える
+                            //   arrow0/arrow1: 右/左スクロールの意味になる（UKADOC）
+                            //   sstpmessage.y: yb と対になる「開始位置」であることを明示
+                            //   number: X は列位置、Y は下端基準になる
+                            let label = if vertical {
                                 match field.key {
                                     "arrow0.x" => "矢印(右) X",
                                     "arrow0.y" => "矢印(右) Y",
                                     "arrow1.x" => "矢印(左) X",
                                     "arrow1.y" => "矢印(左) Y",
+                                    "sstpmessage.x" => "SSTPメッセージ 開始X",
+                                    "sstpmessage.y" => "SSTPメッセージ 開始Y",
+                                    "number.xr" => "カウンタ 列X",
+                                    "number.y"  => "カウンタ 下端Y",
                                     _ => field.label,
                                 }
                             } else {
-                                field.label
+                                match field.key {
+                                    "sstpmessage.x" => "SSTPメッセージ 開始X",
+                                    "number.xr" => "カウンタ 右端X",
+                                    "number.y"  => "カウンタ 上端Y",
+                                    _ => field.label,
+                                }
                             };
                             ui.label(label);
                             ui.add_enabled_ui(enabled, |ui| {
@@ -452,13 +471,14 @@ fn resolve_field_value(
         // 個別設定にキーがあればそちらを優先
         let indiv_text = app.state.individual_texts.get(cfg_key).cloned().unwrap_or_default();
         let indiv_parsed = parse_descript(&indiv_text);
-        if let Some(v) = indiv_parsed.get(field_key) {
+        // 別名表記（number.x / number.yb 等）で書かれていても解決する
+        if let Some(v) = get_aliased(&indiv_parsed, field_key) {
             return v.clone();
         }
     }
     // 共通設定にフォールバック
     let global_parsed = parse_descript(&app.state.descript_text);
-    if let Some(v) = global_parsed.get(field_key) {
+    if let Some(v) = get_aliased(&global_parsed, field_key) {
         return v.clone();
     }
     // dynamic_defaults → field.default
@@ -759,7 +779,10 @@ fn show_int_widget(
             } else {
                 app.state.descript_text.clone()
             };
-            let new_text = set_descript_value(&descript_text, field.key, current);
+            // 座標系の別名（number.x / number.yb）は素材の表記を維持して書き戻す。
+            // 別名を持たないキーは set_descript_value にそのまま委譲される。
+            // 他のウィジェット（text/dropdown/direction/color）は座標キーを扱わないため対象外。
+            let new_text = set_descript_value_aliased(&descript_text, field.key, current);
             write_back(app, ctx, cfg_key, use_individual, new_text);
         }
     }
@@ -917,6 +940,8 @@ fn show_drag_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &egui::C
                 if parts.contains_key("arrow1.png")    { all_entries.push((arrow1_label,   DragEditTarget::Arrow1));       }
                 if parts.contains_key("clickwait.png") { all_entries.push(("クリック待ち",   DragEditTarget::ClickWait));    }
                 if has_sstp                             { all_entries.push(("SSTPマーカー",   DragEditTarget::SstpMarker));   }
+                // ドラッグで編集するのは縦横とも開始位置(sstpmessage.x/.y)。
+                // 終端(xr/yb)は設定パネルの数値入力で編集する
                 if has_sstp                             { all_entries.push(("SSTPメッセージ", DragEditTarget::SstpMessage));  }
                                                           all_entries.push(("カウンタ数値",   DragEditTarget::Counter));
                 if parts.contains_key("online0.png")   { all_entries.push(("オンライン",     DragEditTarget::OnlineMarker)); }

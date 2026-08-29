@@ -136,11 +136,17 @@ impl GdiSession {
         }
     }
 
-    /// 送り方向の上限座標 max に収まる文字数まで切り詰める。
-    /// start は送り方向の開始座標（横書き=X、縦書き=Y）。計測は measure と同様に
+    /// `start` から書き始めた `text` を送り方向の上限座標 `max` で打ち切る。
+    ///
+    /// `start` は送り方向の開始座標（横書き=X、縦書き=Y）。計測は measure と同様に
     /// ベースライン方向のため、縦書きセッションでもそのまま使える。
-    /// 文字の開始位置がちょうど max 上にある場合は描画対象に含める（SSP準拠）。
-    pub fn clip_to_max(&self, text: &str, start: i32, max: i32) -> String {
+    ///
+    /// `include_straddling` は上限をまたぐ文字の扱いを決める。
+    /// - `true`: またぐ文字も含める。自動改行（wordwrappoint）用。
+    ///   その文字まで書いてから次行へ送るため、含めないと1文字早く折り返してしまう。
+    /// - `false`: 収まり切る文字だけを残す。終端座標（sstpmessage.xr/.yb）用。
+    ///   SSP は指定位置に収まらない文字を表示しないため。
+    pub fn clip_to_max(&self, text: &str, start: i32, max: i32, include_straddling: bool) -> String {
         let budget = max - start;
         if text.is_empty() || budget < 0 { return String::new(); }
         unsafe {
@@ -159,9 +165,15 @@ impl GdiSession {
             );
             let mut fit_cu = 0usize;
             for i in 0..n {
-                let start = if i == 0 { 0 } else { extents[i - 1] };
-                // 開始位置がラインを超えた文字から打ち切る（ライン上ちょうどは描画する）
-                if start > budget { break; }
+                // extents[i] は先頭から i 文字目までの累積幅（= その文字の終端位置）
+                let edge = if include_straddling {
+                    // 開始位置がラインを超えた文字から打ち切る（ライン上ちょうどは描画する）
+                    if i == 0 { 0 } else { extents[i - 1] }
+                } else {
+                    // 終端がラインを超えた文字は含めない
+                    extents[i]
+                };
+                if edge > budget { break; }
                 fit_cu = i + 1;
             }
             String::from_utf16_lossy(&wide[..fit_cu]).to_string()
@@ -189,6 +201,27 @@ impl Drop for GdiSession {
 /// vertical のとき px は「列の右端」、py は「先頭文字の上端」、
 /// max_limit は折り返し（クリップ）する Y 座標を意味する。
 /// 横書きのときは従来どおり px,py = 左上、max_limit = X 座標。
+/// テキストを送り方向で打ち切る位置と、境界をまたぐ文字の扱い。
+///
+/// 座標は送り方向の絶対位置（横書き=X、縦書き=Y）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextLimit {
+    pub pos: i32,
+    /// 上限をまたぐ文字を含めるか
+    pub include_straddling: bool,
+}
+
+impl TextLimit {
+    /// 自動改行（wordwrappoint）用。またぐ文字も書いてから次行へ送る。
+    pub fn wrap(pos: i32) -> Self {
+        Self { pos, include_straddling: true }
+    }
+    /// 終端座標（sstpmessage.xr / .yb）用。収まらない文字は表示しない。
+    pub fn clip(pos: i32) -> Self {
+        Self { pos, include_straddling: false }
+    }
+}
+
 pub fn draw_text_gdi(
     img: &mut RgbaImage,
     font_name: &str,
@@ -198,7 +231,7 @@ pub fn draw_text_gdi(
     size_px: f32,
     color: Rgb,
     shadow: Option<(Rgb, bool)>,
-    max_limit: Option<i32>,
+    max_limit: Option<TextLimit>,
     no_aa: bool,
     vertical: bool,
 ) -> bool {
@@ -256,7 +289,7 @@ fn draw_text_gdi_impl(
     size_px: f32,
     color: Rgb,
     shadow: Option<(Rgb, bool)>,
-    max_limit: Option<i32>,
+    max_limit: Option<TextLimit>,
     no_aa: bool,
     vertical: bool,
 ) -> bool {
@@ -266,7 +299,7 @@ fn draw_text_gdi_impl(
     };
     // クリップの起点は送り方向の開始座標（横書き=px、縦書き=py）
     let clipped = match max_limit {
-        Some(m) => sess.clip_to_max(text, if vertical { py } else { px }, m),
+        Some(m) => sess.clip_to_max(text, if vertical { py } else { px }, m.pos, m.include_straddling),
         None => text.to_string(),
     };
     let text = clipped.as_str();

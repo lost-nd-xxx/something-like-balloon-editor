@@ -173,7 +173,8 @@ impl BalloonEditorApp {
             let indiv_parsed = crate::core::descript::parse_descript(indiv);
             let mut merged = self.state.descript_text.clone();
             for (k, v) in &indiv_parsed {
-                merged = crate::core::descript::set_descript_value(&merged, k, v);
+                // 別名表記の違い（number.xr と number.x 等）で両方の行が残らないようにする
+                merged = crate::core::descript::set_descript_value_aliased(&merged, k, v);
             }
             merged
         } else {

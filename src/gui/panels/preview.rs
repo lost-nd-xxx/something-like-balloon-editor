@@ -1,7 +1,7 @@
 use egui::{Context, Ui, Vec2};
 use crate::gui::app::BalloonEditorApp;
 use crate::gui::state::{CanvasBg, DragEditTarget, DragState, RectEdge, ZOOM_STEPS};
-use crate::core::descript::{parse_descript, set_descript_value, pos_str};
+use crate::core::descript::{parse_descript, set_descript_value, set_descript_value_aliased, pos_str, get_aliased};
 use image::RgbaImage;
 
 /// field_def の ACCORDION_GROUPS からキー→デフォルト値のマップを構築する
@@ -458,13 +458,31 @@ fn get_descript_val(
     iw: i32,
     ih: i32,
 ) -> i32 {
-    let raw = parsed.get(key)
-        .or_else(|| defaults.get(key))
+    let raw = get_aliased(parsed, key)
+        .or_else(|| get_aliased(defaults, key))
         .map(|s| s.as_str())
         .unwrap_or("0");
+    // .y / .yb / .top / .bottom は else 側（ih 基準）に落ちる
     let is_x_axis = key.ends_with(".x") || key.ends_with(".xr")
         || key.ends_with(".left") || key.ends_with(".right");
     pos_str(raw, if is_x_axis { iw } else { ih })
+}
+
+/// カウンタ数値（number.xr / number.y）の現在座標を返す（画像座標系）。
+///
+/// number.xr / number.x、number.y / number.yb はそれぞれ完全に同一の別名で、
+/// 値は pos_str 規則（正値=左/上起点、負値=右/下起点）。指定座標は数値の右端を指す。
+/// core/preview.rs の描画側と解釈を揃えること。
+fn counter_current_val(
+    parsed: &std::collections::HashMap<String, String>,
+    defaults: &std::collections::HashMap<String, String>,
+    iw: i32,
+    ih: i32,
+) -> (i32, i32) {
+    (
+        get_descript_val("number.xr", parsed, defaults, iw, ih),
+        get_descript_val("number.y",  parsed, defaults, iw, ih),
+    )
 }
 
 /// ValidRect/CommunicateBox の各辺の現在座標を返す（画像座標系）
@@ -562,10 +580,7 @@ fn target_info(
         DragEditTarget::SstpMarker   => get_xy("sstpmarker.x", "sstpmarker.y"),
         DragEditTarget::SstpMessage  => get_xy("sstpmessage.x", "sstpmessage.y"),
         DragEditTarget::OnlineMarker => get_xy("onlinemarker.x", "onlinemarker.y"),
-        DragEditTarget::Counter      => {
-            let xr: i32 = parsed.get("number.xr").and_then(|s| s.parse().ok()).unwrap_or(-20);
-            (iw + xr, g("number.y"))
-        }
+        DragEditTarget::Counter      => counter_current_val(parsed, defaults, iw, ih),
         // ValidRect/CommunicateBox は辺ごとに値が違うので (0,0) を返す（draw_drag_overlay で個別に読む）
         DragEditTarget::ValidRect | DragEditTarget::CommunicateBox => (0, 0),
         DragEditTarget::WordWrap  => (g("wordwrappoint.x"), 0),
@@ -735,8 +750,8 @@ fn was_negative_in_descript(
     active_edge: Option<RectEdge>,
 ) -> (bool, bool) {
     let raw = |key: &str| -> bool {
-        parsed.get(key)
-            .or_else(|| defaults.get(key))
+        get_aliased(parsed, key)
+            .or_else(|| get_aliased(defaults, key))
             .and_then(|s| s.trim().parse::<i32>().ok())
             .map(|v| v < 0)
             .unwrap_or(false)
@@ -748,7 +763,8 @@ fn was_negative_in_descript(
         DragEditTarget::SstpMarker   => (raw("sstpmarker.x"),     raw("sstpmarker.y")),
         DragEditTarget::SstpMessage  => (raw("sstpmessage.x"),    raw("sstpmessage.y")),
         DragEditTarget::OnlineMarker => (raw("onlinemarker.x"),   raw("onlinemarker.y")),
-        DragEditTarget::Counter      => (false, raw("number.y")), // xr は常に iw からの相対値
+        // number.xr も pos_str 規則になったので、他と同じく負値記法を保存する
+        DragEditTarget::Counter      => (raw("number.xr"),        raw("number.y")),
         DragEditTarget::WordWrap     => (raw("wordwrappoint.x"),  false),
         DragEditTarget::WordWrapY    => (false, raw("wordwrappoint.y")),
         DragEditTarget::ValidRect => match active_edge {
@@ -802,8 +818,9 @@ fn write_val_to_descript(
             text = set_descript_value(&text, "onlinemarker.y", &vy);
         }
         DragEditTarget::Counter => {
-            text = set_descript_value(&text, "number.xr", &(val.0 - iw).to_string());
-            text = set_descript_value(&text, "number.y", &vy);
+            // 素材が number.x / number.yb 表記ならその表記のまま更新される
+            text = set_descript_value_aliased(&text, "number.xr", &vx);
+            text = set_descript_value_aliased(&text, "number.y", &vy);
         }
         DragEditTarget::WordWrap => {
             text = set_descript_value(&text, "wordwrappoint.x", &vx);
@@ -933,10 +950,7 @@ fn draw_drag_overlay(
                     DragEditTarget::SstpMarker   => (g("sstpmarker.x"), g("sstpmarker.y")),
                     DragEditTarget::SstpMessage  => (g("sstpmessage.x"), g("sstpmessage.y")),
                     DragEditTarget::OnlineMarker => (g("onlinemarker.x"), g("onlinemarker.y")),
-                    DragEditTarget::Counter      => {
-                        let xr: i32 = parsed.get("number.xr").and_then(|s| s.parse().ok()).unwrap_or(-20);
-                        (iw + xr, g("number.y"))
-                    }
+                    DragEditTarget::Counter      => counter_current_val(parsed, defaults, iw, ih),
                     _ => (0, 0),
                 }
             });
