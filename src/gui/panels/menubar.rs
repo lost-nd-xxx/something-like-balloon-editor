@@ -1,6 +1,6 @@
 use egui::{Context, Ui};
 use crate::gui::app::BalloonEditorApp;
-use crate::gui::state::{PreviewTextMode, ThemeMode};
+use crate::gui::state::{PreviewTextMode, ThemeMode, ZOOM_STEPS};
 
 pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
     egui::menu::bar(ui, |ui| {
@@ -18,19 +18,9 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
             }
             if ui.button("フォルダからプロジェクトを作成...").clicked() {
                 ui.close_menu();
-                let picked = rfd::FileDialog::new()
-                    .set_title("取り込む素材フォルダを選択")
-                    .pick_folder();
-                if let Some(src) = picked {
-                    let folder_name = src.file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("")
-                        .to_string();
-                    app.state.import_folder_src = src;
-                    app.state.import_folder_project_name = folder_name;
-                    app.state.import_folder_warning = String::new();
-                    app.state.show_import_folder_window = true;
-                }
+                // update 内で rfd を同期呼び出しするとそのフレームが完結しないため、
+                // 要求だけ立てて別スレッドで開く
+                app.state.request_pick_import_folder = true;
             }
             ui.separator();
             ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
@@ -54,18 +44,8 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
             ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
                 if ui.button("画像をプロジェクトに追加...").clicked() {
                     ui.close_menu();
-                    let picked = rfd::FileDialog::new()
-                        .set_title("インポートする画像を選択")
-                        .add_filter("PNG画像", &["png"])
-                        .pick_files();
-                    if let Some(files) = picked {
-                        if !files.is_empty() {
-                            app.state.import_queue = files;
-                            app.state.import_queue_index = 0;
-                            app.state.show_import_window = true;
-                            app.preset_import_from_current_queue(ctx);
-                        }
-                    }
+                    // 同上（update 内での rfd 同期呼び出しを避ける）
+                    app.state.request_pick_import_images = true;
                 }
             });
             ui.add_enabled_ui(app.state.is_project_dir(), |ui| {
@@ -193,8 +173,8 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
             }
             ui.separator();
 
-            // テーマ（サブメニュー）
-            ui.menu_button("テーマ", |ui| {
+            // アプリテーマ（サブメニュー）
+            ui.menu_button("アプリテーマ", |ui| {
                 for (mode, label) in [
                     (ThemeMode::Light, "ライト"),
                     (ThemeMode::Dark,  "ダーク"),
@@ -240,13 +220,24 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                     let swatch = egui::Color32::from_rgb(sr, sg, sb);
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
                     ui.painter().rect_filled(rect, 2.0, swatch);
-                    ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.fg_stroke.color));
+                    ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.fg_stroke.color));
                     if ui.interact(rect, ui.id().with("bg_swatch"), egui::Sense::click()).clicked() {
                         app.state.canvas_bg = crate::gui::state::CanvasBg::Solid(sr, sg, sb);
                         app.state.show_bg_color_window = true;
                         ui.close_menu();
                     }
                 });
+            });
+
+            // プレビュー倍率（サブメニュー）
+            ui.menu_button("プレビュー倍率", |ui| {
+                for (i, z) in ZOOM_STEPS.iter().enumerate() {
+                    let label = format!("{}%", (z * 100.0) as i32);
+                    if ui.radio(app.state.preview_zoom_idx == i, label).clicked() {
+                        app.state.preview_zoom_idx = i;
+                        ui.close_menu();
+                    }
+                }
             });
         });
 

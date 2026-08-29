@@ -6,6 +6,7 @@ pub enum FieldType {
     Text,      // テキスト
     Int,       // 整数（Spinbox）
     Dropdown,  // ドロップダウン選択
+    Direction, // テキスト方向ドロップダウン（"0"=横書き / "1"=縦書き）
 }
 
 #[derive(Debug, Clone)]
@@ -103,6 +104,17 @@ macro_rules! fd {
         FieldDef { key: $key, label: $label, field_type: $ft, choices: $choices, default: $default }
     };
 }
+
+/// テキスト方向（vertical）の選択肢。表示名と descript.txt の値の対応。
+/// 値が "0"/"1" のため、表示名をそのまま値に使う Dropdown とは別扱いにする。
+pub const DIRECTION_CHOICES: &[(&str, &str)] = &[
+    ("横書き", "0"),
+    ("縦書き", "1"),
+];
+
+/// テキスト方向設定（バルーン全体に効く）。アコーディオン外に独立配置する
+pub static VERTICAL_FIELD: FieldDef =
+    fd!("vertical", "テキスト方向", FieldType::Direction, &[], "0");
 
 pub static ACCORDION_GROUPS: &[AccordionGroup] = &[
     AccordionGroup {
@@ -212,6 +224,7 @@ pub static ACCORDION_GROUPS: &[AccordionGroup] = &[
             fd!("validrect.right",   "テキスト域 右",    FieldType::Int, &[], "-10"),
             fd!("validrect.bottom",  "テキスト域 下",    FieldType::Int, &[], "-10"),
             fd!("wordwrappoint.x",   "折り返しX",        FieldType::Int, &[], "-20"),
+            fd!("wordwrappoint.y",   "折り返しY",        FieldType::Int, &[], "-20"),
             fd!("arrow0.x",          "矢印(上) X",       FieldType::Int, &[], "-5"),
             fd!("arrow0.y",          "矢印(上) Y",       FieldType::Int, &[], "5"),
             fd!("arrow1.x",          "矢印(下) X",       FieldType::Int, &[], "-5"),
@@ -220,11 +233,21 @@ pub static ACCORDION_GROUPS: &[AccordionGroup] = &[
             fd!("clickwaitmarker.y", "クリック待ち Y",   FieldType::Int, &[], "-10"),
             fd!("sstpmarker.x",      "SSTPマーカー X",   FieldType::Int, &[], "5"),
             fd!("sstpmarker.y",      "SSTPマーカー Y",   FieldType::Int, &[], "-5"),
-            fd!("sstpmessage.x",     "SSTPメッセージ X", FieldType::Int, &[], "10"),
-            fd!("sstpmessage.y",     "SSTPメッセージ Y", FieldType::Int, &[], "-5"),
+            // 既定値は横書きの実機値（SSP 2.8.84 確認）。縦書き時の実機既定は x=16 / y=40 だが、
+            // ここは未入力時にUIへ出す参考値なので横書きの値で固定し、
+            // 実描画の既定値は core/preview.rs 側で縦横を切り替える。
+            fd!("sstpmessage.x",     "SSTPメッセージ X", FieldType::Int, &[], "40"),
+            fd!("sstpmessage.y",     "SSTPメッセージ Y", FieldType::Int, &[], "-15"),
+            // xr は横書き専用、yb は縦書き専用（それぞれ他方では無視される）。settings.rs で出し分ける。
+            // 初期値を負値にするのは、バルーンごとにサイズが違っても
+            // それぞれの画像の右端・下端付近に解決させるため（正値だと固定座標になり、
+            // 高さ・幅の異なるバルーンで描画範囲がずれる）。
+            // 0 は「左端/上端で打ち切り」＝文字が消える値なので初期値にしてはいけない。
+            fd!("sstpmessage.xr",    "SSTPメッセージ 終端X", FieldType::Int, &[], "-1"),
+            fd!("sstpmessage.yb",    "SSTPメッセージ 終端Y", FieldType::Int, &[], "-1"),
             fd!("onlinemarker.x",    "オンライン X",     FieldType::Int, &[], "20"),
             fd!("onlinemarker.y",    "オンライン Y",     FieldType::Int, &[], "-10"),
-            fd!("number.xr",         "カウンタ 右端X",   FieldType::Int, &[], "-20"),
+            fd!("number.xr",         "カウンタ X",       FieldType::Int, &[], "-20"),
             fd!("number.y",          "カウンタ Y",       FieldType::Int, &[], "-5"),
         ],
     },

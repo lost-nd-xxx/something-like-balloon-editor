@@ -4,12 +4,15 @@ use crate::gui::field_def::{
     ACCORDION_GROUPS, DECORATION_GROUPS, FieldType, GroupVisibility,
 };
 use crate::core::descript::{
-    parse_descript, set_descript_value, get_color_from_descript, set_color_in_descript,
+    parse_descript, set_descript_value, set_descript_value_aliased, get_aliased,
+    get_color_from_descript, set_color_in_descript,
 };
 use crate::core::color::Rgb;
 use crate::gui::state::DragEditTarget;
 
 pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
+    // SidePanel の inner_margin は上が詰まっているため、題字の上に余白を入れる
+    ui.add_space(3.0);
     ui.strong("バルーン設定");
     ui.separator();
 
@@ -21,7 +24,10 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
         show_basic_info_section(ui, app);
         });
         ui.separator();
-        // PNG一覧プレビュー中はバルーン設定・位置編集をグレーアウト＆非表示
+        // PNG一覧プレビュー中はバルーン設定・位置編集の代わりに画像編集を表示
+        if png_preview && !no_project {
+            show_png_edit_section(ui, app, ctx);
+        }
         ui.add_enabled_ui(!png_preview && !no_project, |ui| {
             if !png_preview {
                 egui::CollapsingHeader::new("バルーン設定詳細")
@@ -34,6 +40,42 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
             }
         });
     });
+}
+
+/// 単体プレビュー中の画像編集セクション（回転/反転）
+fn show_png_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
+    use crate::core::composer::ImageTransform;
+
+    egui::CollapsingHeader::new("画像編集")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("操作するとファイルが直接書き換わります(元に戻すには逆の操作)")
+                    .color(ui.visuals().text_color())
+                    .small(),
+            );
+            ui.add_space(4.0);
+
+            let ops: &[(&str, ImageTransform)] = &[
+                ("左90°回転",  ImageTransform::RotateLeft),
+                ("右90°回転",  ImageTransform::RotateRight),
+                ("180°回転",   ImageTransform::Rotate180),
+                ("左右反転",   ImageTransform::FlipH),
+                ("上下反転",   ImageTransform::FlipV),
+            ];
+            let mut clicked: Option<ImageTransform> = None;
+            ui.horizontal_wrapped(|ui| {
+                for (label, op) in ops {
+                    if ui.button(*label).clicked() {
+                        clicked = Some(*op);
+                    }
+                }
+            });
+            if let Some(op) = clicked {
+                app.transform_preview_png(op, ctx);
+            }
+        });
+    ui.separator();
 }
 
 fn show_basic_info_section(ui: &mut Ui, app: &mut BalloonEditorApp) {
@@ -150,6 +192,18 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
     // 表示可否フラグ
     let show_c  = is_c;
     let show_ks = !is_c;
+    // 縦書きか。フィールドごとに呼ぶと毎フレーム parse_descript が走るのでここで一度だけ解決する
+    let vertical = is_vertical_effective(app, &cfg_key);
+
+    // テキスト方向（バルーン全体に効く設定のため、アコーディオン外に独立配置）
+    if show_ks {
+        use crate::gui::field_def::VERTICAL_FIELD;
+        ui.horizontal(|ui| {
+            ui.label(VERTICAL_FIELD.label);
+            show_field_widget(ui, app, ctx, &VERTICAL_FIELD, &cfg_key, use_individual);
+        });
+        ui.separator();
+    }
 
     for group in ACCORDION_GROUPS {
         let visible = match group.visibility {
@@ -278,6 +332,10 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                                 }
                             }
 
+                            // 終端座標は縦横で使う軸が違う（他方は SSP に無視される）
+                            if field.key == "sstpmessage.yb" && !vertical { continue; }
+                            if field.key == "sstpmessage.xr" && vertical  { continue; }
+
                             // 影スタイルは対応する影色が none または未設定のときグレーアウト
                             let enabled = if field.key.ends_with(".shadowstyle") {
                                 let shadow_color_key = field.key.trim_end_matches("style").to_string() + "color.r";
@@ -290,7 +348,31 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                             } else {
                                 true
                             };
-                            ui.label(field.label);
+                            // 縦書きで意味の変わるフィールドはラベルを差し替える
+                            //   arrow0/arrow1: 右/左スクロールの意味になる（UKADOC）
+                            //   sstpmessage.y: yb と対になる「開始位置」であることを明示
+                            //   number: X は列位置、Y は下端基準になる
+                            let label = if vertical {
+                                match field.key {
+                                    "arrow0.x" => "矢印(右) X",
+                                    "arrow0.y" => "矢印(右) Y",
+                                    "arrow1.x" => "矢印(左) X",
+                                    "arrow1.y" => "矢印(左) Y",
+                                    "sstpmessage.x" => "SSTPメッセージ 開始X",
+                                    "sstpmessage.y" => "SSTPメッセージ 開始Y",
+                                    "number.xr" => "カウンタ 列X",
+                                    "number.y"  => "カウンタ 下端Y",
+                                    _ => field.label,
+                                }
+                            } else {
+                                match field.key {
+                                    "sstpmessage.x" => "SSTPメッセージ 開始X",
+                                    "number.xr" => "カウンタ 右端X",
+                                    "number.y"  => "カウンタ 上端Y",
+                                    _ => field.label,
+                                }
+                            };
+                            ui.label(label);
                             ui.add_enabled_ui(enabled, |ui| {
                                 show_field_widget(ui, app, ctx, field, &cfg_key, use_individual);
                             });
@@ -298,8 +380,83 @@ fn show_accordion_settings(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Contex
                         }
                     });
 
+                // 文字色・背景色の設定直下にコントラスト比を出す。
+                // 計算対象と一致するグループにのみ表示する
+                // （k/s系=通常文字の font.color、c系=入力ボックスの色）。
+                if group.name == "通常文字" || group.name == "入力ボックス" {
+                    show_contrast(ui, app);
+                }
             });
     }
+}
+
+/// コントラスト比の判定結果（WCAG2 / APCA の2指標）
+struct ContrastInfo {
+    wcag: String,
+    apca: String,
+}
+
+/// 選択中バルーンのコントラスト比を算出する。
+/// k/s系: バルーン画像中央サンプリング色 vs font.color
+/// c*系 : communicatebox.background.color vs communicatebox.font.color
+///
+/// 背景色は「塗り」レイヤーの色変更が合成結果に反映されたものを
+/// サンプリングするため、ツールバーで色を変えると追随する。
+fn calc_contrast(app: &BalloonEditorApp) -> Option<ContrastInfo> {
+    use crate::core::color::{contrast_ratio, wcag_level, apca_lc, apca_bronze};
+    use crate::core::composer::sample_center_color;
+
+    let balloon_name = app.state.selected_balloon.trim_end_matches(".png");
+    let cfg_key = format!("{}s.txt", balloon_name);
+    // 個別設定と共通設定をマージ（個別設定が優先、差分ファイル仕様に対応）
+    let parsed = {
+        let mut merged = parse_descript(&app.state.descript_text);
+        if let Some(indiv) = app.state.individual_texts.get(&cfg_key) {
+            for (k, v) in parse_descript(indiv) { merged.insert(k, v); }
+        }
+        merged
+    };
+
+    let (bg, fg) = if app.state.is_balloonc() {
+        (
+            get_color_from_descript(&parsed, "communicatebox.background.color")
+                .unwrap_or(Rgb(255, 255, 255)),
+            get_color_from_descript(&parsed, "communicatebox.font.color")
+                .unwrap_or(Rgb(0, 0, 0)),
+        )
+    } else {
+        let img = app.state.balloon_cache.get(&app.state.selected_balloon)?;
+        (
+            sample_center_color(img, 0.25),
+            get_color_from_descript(&parsed, "font.color").unwrap_or(Rgb(0, 0, 0)),
+        )
+    };
+
+    let ratio = contrast_ratio(bg, fg);
+    let lc    = apca_lc(fg, bg);
+    Some(ContrastInfo {
+        wcag: format!("WCAG2: {:.2}:1 {}", ratio, wcag_level(ratio)),
+        apca: format!("APCA:  Lc {:.1} {}", lc, apca_bronze(lc)),
+    })
+}
+
+/// コントラスト比を表示する。文字色・背景色の設定直下に置くため、
+/// 色を変えた結果がその場で確認できる。
+fn show_contrast(ui: &mut Ui, app: &BalloonEditorApp) {
+    let Some(info) = calc_contrast(app) else { return };
+    ui.separator();
+    ui.label(egui::RichText::new("コントラスト比").small());
+    ui.label(egui::RichText::new(info.wcag).small());
+    ui.label(egui::RichText::new(info.apca).small());
+}
+
+/// 縦書き（vertical,1）が有効か（個別設定 → 共通設定の順で解決）
+fn is_vertical_effective(app: &BalloonEditorApp, cfg_key: &str) -> bool {
+    app.state.individual_texts.get(cfg_key)
+        .and_then(|t| parse_descript(t).get("vertical").cloned())
+        .or_else(|| parse_descript(&app.state.descript_text).get("vertical").cloned())
+        .map(|v| v.trim() == "1")
+        .unwrap_or(false)
 }
 
 /// 個別設定→共通設定→dynamic_defaults→field.default の優先順でキーの値を解決する。
@@ -314,13 +471,14 @@ fn resolve_field_value(
         // 個別設定にキーがあればそちらを優先
         let indiv_text = app.state.individual_texts.get(cfg_key).cloned().unwrap_or_default();
         let indiv_parsed = parse_descript(&indiv_text);
-        if let Some(v) = indiv_parsed.get(field_key) {
+        // 別名表記（number.x / number.yb 等）で書かれていても解決する
+        if let Some(v) = get_aliased(&indiv_parsed, field_key) {
             return v.clone();
         }
     }
     // 共通設定にフォールバック
     let global_parsed = parse_descript(&app.state.descript_text);
-    if let Some(v) = global_parsed.get(field_key) {
+    if let Some(v) = get_aliased(&global_parsed, field_key) {
         return v.clone();
     }
     // dynamic_defaults → field.default
@@ -383,6 +541,9 @@ fn show_field_widget(
         }
         FieldType::Dropdown => {
             show_dropdown_widget(ui, app, ctx, field, &current_str, cfg_key, use_individual);
+        }
+        FieldType::Direction => {
+            show_direction_widget(ui, app, ctx, field, &current_str, cfg_key, use_individual);
         }
     }
 }
@@ -567,12 +728,27 @@ fn show_int_widget(
 ) {
     use crate::gui::state::EditingBuf;
 
-    let mut val: i32 = current_str.parse().unwrap_or(0);
+    // 編集中（editing_buf がこのフィールドを指す間）はバッファ値を DragValue の外部値にする。
+    // 毎フレーム descript の値でリセットすると、DragValue がドラッグ中の精密値を
+    // 「外部変更があった」とみなして破棄し、ドラッグで値が動かなくなるため。
+    let editing_mine = app.state.editing_buf.as_ref()
+        .filter(|b| b.field_key == field.key)
+        .map(|b| b.current.clone());
+    let mut val: i32 = editing_mine.as_deref().unwrap_or(current_str).parse().unwrap_or(0);
     // スピナーの最小幅を広げる（桁数の多い値でも読みやすく）
     ui.spacing_mut().interact_size.x = 72.0;
-    let response = ui.add(egui::DragValue::new(&mut val).speed(1.0));
+    // フォントサイズ系は負値・極端な値が描画側のビットマップサイズ計算を壊すため、
+    // UI 段階で入力可能な範囲を絞る（core 側にも同等のクランプがある）
+    let drag = egui::DragValue::new(&mut val).speed(1.0);
+    let drag = if field.key.ends_with("font.height") {
+        drag.range(1..=512)
+    } else {
+        drag
+    };
+    let response = ui.add(drag);
 
-    if response.gained_focus() {
+    // フォーカス取得（クリック・キー操作）またはドラッグ開始で編集開始
+    if (response.gained_focus() || response.drag_started()) && editing_mine.is_none() {
         app.state.push_undo();
         app.state.editing_buf = Some(EditingBuf {
             field_key: field.key.to_string(),
@@ -590,6 +766,7 @@ fn show_int_widget(
     }
 
     let commit = response.lost_focus()
+        || response.drag_stopped()
         || ui.input(|i| i.key_pressed(egui::Key::Enter));
     if commit {
         let mine = app.state.editing_buf.take_if(|b| b.field_key == field.key);
@@ -602,7 +779,10 @@ fn show_int_widget(
             } else {
                 app.state.descript_text.clone()
             };
-            let new_text = set_descript_value(&descript_text, field.key, current);
+            // 座標系の別名（number.x / number.yb）は素材の表記を維持して書き戻す。
+            // 別名を持たないキーは set_descript_value にそのまま委譲される。
+            // 他のウィジェット（text/dropdown/direction/color）は座標キーを扱わないため対象外。
+            let new_text = set_descript_value_aliased(&descript_text, field.key, current);
             write_back(app, ctx, cfg_key, use_individual, new_text);
         }
     }
@@ -630,6 +810,48 @@ fn show_dropdown_widget(
         });
 
     if selected != current_str {
+        app.state.push_undo();
+        let descript_text = if use_individual {
+            app.state.individual_texts.get(cfg_key).cloned().unwrap_or_default()
+        } else {
+            app.state.descript_text.clone()
+        };
+        let new_text = set_descript_value(&descript_text, field.key, &selected);
+        write_back(app, ctx, cfg_key, use_individual, new_text);
+    }
+}
+
+/// テキスト方向ドロップダウン（"0"=横書き / "1"=縦書き）。
+/// 表示名と descript.txt の値が異なるため、汎用 Dropdown とは別実装。
+/// 横書き時も "0" を明示的に書く。
+fn show_direction_widget(
+    ui: &mut Ui,
+    app: &mut BalloonEditorApp,
+    ctx: &egui::Context,
+    field: &crate::gui::field_def::FieldDef,
+    current_str: &str,
+    cfg_key: &str,
+    use_individual: bool,
+) {
+    use crate::gui::field_def::DIRECTION_CHOICES;
+
+    // 未設定・不正値は既定の "0"（横書き）として扱う
+    let current = if current_str.trim() == "1" { "1" } else { "0" };
+    let label_of = |v: &str| DIRECTION_CHOICES.iter()
+        .find(|(_, val)| *val == v)
+        .map(|(name, _)| *name)
+        .unwrap_or("横書き");
+
+    let mut selected = current.to_string();
+    egui::ComboBox::from_id_salt(field.key)
+        .selected_text(label_of(current))
+        .show_ui(ui, |ui| {
+            for &(name, val) in DIRECTION_CHOICES {
+                ui.selectable_value(&mut selected, val.to_string(), name);
+            }
+        });
+
+    if selected != current {
         app.state.push_undo();
         let descript_text = if use_individual {
             app.state.individual_texts.get(cfg_key).cloned().unwrap_or_default()
@@ -677,7 +899,7 @@ fn color32_to_rgb(c: egui::Color32) -> Rgb {
 // ---------------------------------------------------------------------------
 
 fn show_drag_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &egui::Context) {
-    egui::CollapsingHeader::new("位置編集")
+    egui::CollapsingHeader::new("位置編集(ドラッグ操作)")
         .default_open(false)
         .show(ui, |ui| {
             // 常時表示のガイド文言
@@ -700,11 +922,26 @@ fn show_drag_edit_section(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &egui::C
             let area_target = if is_c { DragEditTarget::CommunicateBox } else { DragEditTarget::ValidRect };
             all_entries.push((area_label, area_target));
             if !is_c {
-                all_entries.push(("折り返し X", DragEditTarget::WordWrap));
-                if parts.contains_key("arrow0.png")    { all_entries.push(("矢印(上)",     DragEditTarget::Arrow0));       }
-                if parts.contains_key("arrow1.png")    { all_entries.push(("矢印(下)",     DragEditTarget::Arrow1));       }
+                // 縦書き時は折り返しが wordwrappoint.y になり、
+                // arrow0/arrow1 は右/左スクロールの意味になる（UKADOC）
+                let cfg_key = format!("{}s.txt", sel.trim_end_matches(".png"));
+                let vertical = is_vertical_effective(app, &cfg_key);
+                if vertical {
+                    all_entries.push(("折り返し Y", DragEditTarget::WordWrapY));
+                } else {
+                    all_entries.push(("折り返し X", DragEditTarget::WordWrap));
+                }
+                let (arrow0_label, arrow1_label) = if vertical {
+                    ("矢印(右)", "矢印(左)")
+                } else {
+                    ("矢印(上)", "矢印(下)")
+                };
+                if parts.contains_key("arrow0.png")    { all_entries.push((arrow0_label,   DragEditTarget::Arrow0));       }
+                if parts.contains_key("arrow1.png")    { all_entries.push((arrow1_label,   DragEditTarget::Arrow1));       }
                 if parts.contains_key("clickwait.png") { all_entries.push(("クリック待ち",   DragEditTarget::ClickWait));    }
                 if has_sstp                             { all_entries.push(("SSTPマーカー",   DragEditTarget::SstpMarker));   }
+                // ドラッグで編集するのは縦横とも開始位置(sstpmessage.x/.y)。
+                // 終端(xr/yb)は設定パネルの数値入力で編集する
                 if has_sstp                             { all_entries.push(("SSTPメッセージ", DragEditTarget::SstpMessage));  }
                                                           all_entries.push(("カウンタ数値",   DragEditTarget::Counter));
                 if parts.contains_key("online0.png")   { all_entries.push(("オンライン",     DragEditTarget::OnlineMarker)); }

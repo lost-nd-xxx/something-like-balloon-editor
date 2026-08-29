@@ -48,7 +48,10 @@ fn load_asset_folder_inner(state: &mut AppState, keep_texts: bool) -> anyhow::Re
     // slbe_files.txt のパース（なければ画像編集なしモード）
     // load_balloon_layout は旧 files.txt があれば自動移行する
     // keep_texts のときはメモリ上の slbe_files_text からパースし、ディスクは読まない
-    let layout = if keep_texts && !state.slbe_files_text.is_empty() {
+    // keep_texts のときはメモリ上のテキストを正とする。
+    // 定義を全削除して空になった場合もメモリ側を尊重し、ディスクの古い定義を復活させない
+    // （layout が空になれば下の is_direct_image_mode で実ファイル走査モードに落ちる）
+    let layout = if keep_texts {
         // メモリ上のテキストからパース（エラー時はディスクにフォールバック）
         match crate::core::layout::parse_balloon_layout(&state.slbe_files_text, &asset_dir) {
             Ok(l) => l,
@@ -216,6 +219,25 @@ fn load_asset_folder_inner(state: &mut AppState, keep_texts: bool) -> anyhow::Re
     Ok(())
 }
 
+/// slbe_files.txt にレイヤー定義が無いバルーンを、実画像から直接読み込む。
+///
+/// 素材制作の途中段階（画像だけ用意して定義はこれから）でもプレビュー・出力できるようにする。
+/// 色オーバーレイは適用せず、画像をそのまま使う（レイヤー構造が不明なため）。
+/// 実画像が無い場合は反転元（偶数⇔奇数）から左右反転して補完する。
+fn load_balloon_without_layout(asset_dir: &Path, stem: &str) -> Option<image::RgbaImage> {
+    let path = asset_dir.join(format!("{}.png", stem));
+    if path.exists() {
+        return open_png_rgba(&path).ok();
+    }
+    let src = flip_source_of(stem)?;
+    let src_path = asset_dir.join(format!("{}.png", src));
+    if src_path.exists() {
+        let img = open_png_rgba(&src_path).ok()?;
+        return Some(crate::core::composer::flip_horizontal(&img));
+    }
+    None
+}
+
 /// バルーン画像キャッシュを再構築する
 pub fn rebuild_balloon_cache(state: &mut AppState, asset_dir: &Path) -> anyhow::Result<()> {
     if !asset_dir.is_dir() {
@@ -246,6 +268,14 @@ pub fn rebuild_balloon_cache(state: &mut AppState, asset_dir: &Path) -> anyhow::
         let cs = state.color_set();
         let images = build_all_balloons(asset_dir, &cs, Some(&state.balloon_layout), state.auto_flip)?;
         state.balloon_cache = images;
+        // slbe_files.txt に定義が無いバルーンは実画像から直接読み込んで補完する
+        for name in &state.preview_balloons.clone() {
+            if state.balloon_cache.contains_key(name) { continue; }
+            let stem = name.trim_end_matches(".png");
+            if let Some(img) = load_balloon_without_layout(asset_dir, stem) {
+                state.balloon_cache.insert(name.clone(), img);
+            }
+        }
     }
 
     // パーツキャッシュ
@@ -300,12 +330,13 @@ pub fn rebuild_selected_balloon(state: &mut AppState, asset_dir: &Path) -> anyho
         if let Some(layers) = layout.get(&selected_stem) {
             let img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
             state.balloon_cache.insert(selected.clone(), img);
-        } else if let Some(src) = flip_source_of(&selected_stem) {
-            if let Some(layers) = layout.get(&src) {
-                let src_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
-                let flipped = crate::core::composer::flip_horizontal(&src_img);
-                state.balloon_cache.insert(selected.clone(), flipped);
-            }
+        } else if let Some(layers) = flip_source_of(&selected_stem).and_then(|s| layout.get(&s)) {
+            let src_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
+            let flipped = crate::core::composer::flip_horizontal(&src_img);
+            state.balloon_cache.insert(selected.clone(), flipped);
+        } else if let Some(img) = load_balloon_without_layout(asset_dir, &selected_stem) {
+            // slbe_files.txt に定義が無いバルーン: 実画像をそのまま使う
+            state.balloon_cache.insert(selected.clone(), img);
         }
     }
 
@@ -359,12 +390,13 @@ pub fn ensure_balloon_cached(state: &mut AppState, asset_dir: &Path) -> anyhow::
         if let Some(layers) = layout.get(&selected_stem) {
             let img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
             state.balloon_cache.insert(selected, img);
-        } else if let Some(src) = flip_source_of(&selected_stem) {
-            if let Some(layers) = layout.get(&src) {
-                let src_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
-                let flipped = crate::core::composer::flip_horizontal(&src_img);
-                state.balloon_cache.insert(selected, flipped);
-            }
+        } else if let Some(layers) = flip_source_of(&selected_stem).and_then(|s| layout.get(&s)) {
+            let src_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
+            let flipped = crate::core::composer::flip_horizontal(&src_img);
+            state.balloon_cache.insert(selected, flipped);
+        } else if let Some(img) = load_balloon_without_layout(asset_dir, &selected_stem) {
+            // slbe_files.txt に定義が無いバルーン: 実画像をそのまま使う
+            state.balloon_cache.insert(selected, img);
         }
     }
 
@@ -406,19 +438,17 @@ pub fn build_all_balloons_for_export(
             let cs = state.color_set_for(Some(stem));
 
             let img = if let Some(layers) = layout.get(stem) {
-                // files.txt に直接定義あり
+                // slbe_files.txt に直接定義あり
                 crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?
-            } else if let Some(src) = flip_source_of(stem).filter(|s| layout.contains_key(s)) {
-                if let Some(layers) = layout.get(&src) {
-                    let src_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
-                    crate::core::composer::flip_horizontal(&src_img)
-                } else {
-                    continue;
-                }
+            } else if let Some(layers) = flip_source_of(stem).and_then(|s| layout.get(&s)) {
+                // 反転元の定義から左右反転して補完
+                let src_img = crate::core::composer::build_balloon_from_layout(asset_dir, layers, &cs)?;
+                crate::core::composer::flip_horizontal(&src_img)
+            } else if let Some(img) = load_balloon_without_layout(asset_dir, stem) {
+                // 定義が無いバルーン: 実画像をそのまま出力する
+                img
             } else {
-                {
-                    continue;
-                }
+                continue;
             };
             result.insert(name.clone(), img);
         }
@@ -427,12 +457,32 @@ pub fn build_all_balloons_for_export(
     Ok(result)
 }
 
-/// asset_dir からパーツファイル（arrow*, marker*, online*, sstp*, clickwait*, ok_*, cancel_*, mode_*）を収集する
+/// アプリが色オーバーレイをかけて再出力するパーツ画像のプレフィックス一覧。
+pub const PART_IMAGE_PREFIXES: &[&str] = &[
+    "arrow", "marker", "online", "sstp", "clickwait",
+    "ok_", "cancel_", "mode_",
+];
+
+/// パーツ以外で SSP・ベースウェアが直接参照する画像ファイル名のプレフィックス一覧。
+///
+/// アプリは加工しないが、単体で意味を持つ素材なのでそのまま出力に含める必要がある。
+/// thumbnail は .png / .pna / .pnr の各拡張子で参照される（判定は stem で行う）。
+pub const OTHER_RESERVED_IMAGE_PREFIXES: &[&str] = &["thumbnail"];
+
+/// ファイル名の stem が SSP 参照名かどうか。
+///
+/// 該当する画像は「バルーンの合成材料」ではなく単体で意味を持つ素材なので、
+/// slbe_files.txt のレイヤー定義に現れていても出力からは除外しない。
+pub fn is_reserved_image_stem(stem: &str) -> bool {
+    let stem = stem.to_lowercase();
+    stem.starts_with("balloon")
+        || PART_IMAGE_PREFIXES.iter().any(|p| stem.starts_with(p))
+        || OTHER_RESERVED_IMAGE_PREFIXES.iter().any(|p| stem.starts_with(p))
+}
+
+/// asset_dir からパーツファイル（`PART_IMAGE_PREFIXES` に前方一致するもの）を収集する
 fn collect_part_files(asset_dir: &Path) -> Vec<PathBuf> {
-    let patterns = [
-        "arrow", "marker", "online", "sstp", "clickwait",
-        "ok_", "cancel_", "mode_",
-    ];
+    let patterns = PART_IMAGE_PREFIXES;
     let mut files: Vec<PathBuf> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(asset_dir) {
         for entry in entries.flatten() {

@@ -33,18 +33,20 @@ pub struct GdiSession {
     bg_brush: windows::Win32::Graphics::Gdi::HBRUSH,
     /// DIBSection のピクセルバッファへの生ポインタ（GDI 管理）
     dib_ptr:  *mut u32,
+    /// 縦書きモード（@フォント + escapement 2700 で描画する）
+    vertical: bool,
     pub raw_buf: Vec<u32>,
 }
 
 #[cfg(windows)]
 impl GdiSession {
-    pub fn new(font_name: &str, size_px: f32, no_aa: bool) -> Option<Self> {
+    pub fn new(font_name: &str, size_px: f32, no_aa: bool, vertical: bool) -> Option<Self> {
         unsafe {
             // スクリーン DC なしで Memory DC を作成（DIBSection はデバイス非依存）
             let hdc = CreateCompatibleDC(None);
             if hdc.is_invalid() { return None; }
 
-            let hfont = create_gdi_font(font_name, size_px, no_aa);
+            let hfont = create_gdi_font(font_name, size_px, no_aa, vertical);
             if hfont.is_invalid() { let _ = DeleteDC(hdc); return None; }
             let _ = SelectObject(hdc, hfont);
 
@@ -58,13 +60,19 @@ impl GdiSession {
             let hbmp = create_dib_section(hdc, 1, 1, &mut dib_ptr)?;
             let _ = SelectObject(hdc, hbmp);
 
-            Some(Self { hdc, hfont, hbmp, bmp_w: 1, bmp_h: 1, bg_brush, dib_ptr, raw_buf: Vec::new() })
+            Some(Self { hdc, hfont, hbmp, bmp_w: 1, bmp_h: 1, bg_brush, dib_ptr, vertical, raw_buf: Vec::new() })
         }
     }
 
     /// 必要なサイズの DIBSection を確保する。サイズが変わるたびに作り直す。
-    pub fn ensure_bmp(&mut self, w: i32, h: i32) {
-        if w == self.bmp_w && h == self.bmp_h { return; }
+    ///
+    /// 確保に失敗した場合は `false` を返し、既存のビットマップを維持する。
+    /// 呼び出し側は失敗時に描画を中止すること。成功したと誤認して古い
+    /// （より小さい）バッファへ新サイズでアクセスすると領域外参照になる。
+    #[must_use]
+    pub fn ensure_bmp(&mut self, w: i32, h: i32) -> bool {
+        if w <= 0 || h <= 0 { return false; }
+        if w == self.bmp_w && h == self.bmp_h { return true; }
         unsafe {
             let mut dib_ptr: *mut u32 = std::ptr::null_mut();
             if let Some(new_bmp) = create_dib_section(self.hdc, w, h, &mut dib_ptr) {
@@ -74,6 +82,9 @@ impl GdiSession {
                 self.bmp_w = w;
                 self.bmp_h = h;
                 self.dib_ptr = dib_ptr;
+                true
+            } else {
+                false
             }
         }
     }
@@ -86,10 +97,15 @@ impl GdiSession {
             let _ = FillRect(self.hdc, &rc, self.bg_brush);
             let text_wide = to_wide(text);
             let wide_no_null = &text_wide[..text_wide.len() - 1];
-            let _ = TextOutW(self.hdc, 0, 0, wide_no_null);
-            let pixel_count = (w * h) as usize;
+            // 縦書き（escapement 2700）では (x, y) が「列の右端・先頭文字の上端」になる
+            let (tx, ty) = if self.vertical { (w - 2, 0) } else { (0, 0) };
+            let _ = TextOutW(self.hdc, tx, ty, wide_no_null);
+            // コピー長は実際に確保済みの DIBSection のサイズから求める。
+            // 引数の w/h をそのまま使うと、ensure_bmp が失敗していた場合に
+            // 実バッファより長くコピーして領域外参照になる。
+            let pixel_count = (self.bmp_w as i64 * self.bmp_h as i64).max(0) as usize;
             self.raw_buf.resize(pixel_count, 0u32);
-            if !self.dib_ptr.is_null() {
+            if !self.dib_ptr.is_null() && pixel_count > 0 {
                 std::ptr::copy_nonoverlapping(self.dib_ptr, self.raw_buf.as_mut_ptr(), pixel_count);
             }
         }
@@ -97,6 +113,9 @@ impl GdiSession {
 
     pub fn bmp_stride(&self) -> i32 { self.bmp_w }
 
+    /// テキストの送り幅（px）を計測する。
+    /// GetTextExtentPoint32W は escapement に関係なくベースライン方向の送り幅を返すため、
+    /// 縦書きセッションではそのまま「列の長さ」として使える。
     pub fn measure(&self, text: &str) -> f32 {
         unsafe {
             let text_wide = to_wide(text);
@@ -117,9 +136,19 @@ impl GdiSession {
         }
     }
 
-    pub fn clip_to_max_x(&self, text: &str, px: i32, max_x: i32) -> String {
-        let budget = (max_x - px).max(0) as i32;
-        if text.is_empty() || budget <= 0 { return String::new(); }
+    /// `start` から書き始めた `text` を送り方向の上限座標 `max` で打ち切る。
+    ///
+    /// `start` は送り方向の開始座標（横書き=X、縦書き=Y）。計測は measure と同様に
+    /// ベースライン方向のため、縦書きセッションでもそのまま使える。
+    ///
+    /// `include_straddling` は上限をまたぐ文字の扱いを決める。
+    /// - `true`: またぐ文字も含める。自動改行（wordwrappoint）用。
+    ///   その文字まで書いてから次行へ送るため、含めないと1文字早く折り返してしまう。
+    /// - `false`: 収まり切る文字だけを残す。終端座標（sstpmessage.xr/.yb）用。
+    ///   SSP は指定位置に収まらない文字を表示しないため。
+    pub fn clip_to_max(&self, text: &str, start: i32, max: i32, include_straddling: bool) -> String {
+        let budget = max - start;
+        if text.is_empty() || budget < 0 { return String::new(); }
         unsafe {
             let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
             let n = wide.len() - 1;
@@ -136,8 +165,15 @@ impl GdiSession {
             );
             let mut fit_cu = 0usize;
             for i in 0..n {
-                let start = if i == 0 { 0 } else { extents[i - 1] };
-                if start >= budget { break; }
+                // extents[i] は先頭から i 文字目までの累積幅（= その文字の終端位置）
+                let edge = if include_straddling {
+                    // 開始位置がラインを超えた文字から打ち切る（ライン上ちょうどは描画する）
+                    if i == 0 { 0 } else { extents[i - 1] }
+                } else {
+                    // 終端がラインを超えた文字は含めない
+                    extents[i]
+                };
+                if edge > budget { break; }
                 fit_cu = i + 1;
             }
             String::from_utf16_lossy(&wide[..fit_cu]).to_string()
@@ -162,6 +198,30 @@ impl Drop for GdiSession {
 // ---------------------------------------------------------------------------
 
 /// GDI でテキストを描画し、RgbaImage の指定座標に合成する。
+/// vertical のとき px は「列の右端」、py は「先頭文字の上端」、
+/// max_limit は折り返し（クリップ）する Y 座標を意味する。
+/// 横書きのときは従来どおり px,py = 左上、max_limit = X 座標。
+/// テキストを送り方向で打ち切る位置と、境界をまたぐ文字の扱い。
+///
+/// 座標は送り方向の絶対位置（横書き=X、縦書き=Y）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextLimit {
+    pub pos: i32,
+    /// 上限をまたぐ文字を含めるか
+    pub include_straddling: bool,
+}
+
+impl TextLimit {
+    /// 自動改行（wordwrappoint）用。またぐ文字も書いてから次行へ送る。
+    pub fn wrap(pos: i32) -> Self {
+        Self { pos, include_straddling: true }
+    }
+    /// 終端座標（sstpmessage.xr / .yb）用。収まらない文字は表示しない。
+    pub fn clip(pos: i32) -> Self {
+        Self { pos, include_straddling: false }
+    }
+}
+
 pub fn draw_text_gdi(
     img: &mut RgbaImage,
     font_name: &str,
@@ -171,20 +231,21 @@ pub fn draw_text_gdi(
     size_px: f32,
     color: Rgb,
     shadow: Option<(Rgb, bool)>,
-    max_x: Option<i32>,
+    max_limit: Option<TextLimit>,
     no_aa: bool,
+    vertical: bool,
 ) -> bool {
     #[cfg(windows)]
-    { draw_text_gdi_impl(img, font_name, text, px, py, size_px, color, shadow, max_x, no_aa) }
+    { draw_text_gdi_impl(img, font_name, text, px, py, size_px, color, shadow, max_limit, no_aa, vertical) }
     #[cfg(not(windows))]
-    { let _ = (img, font_name, text, px, py, size_px, color, shadow, max_x, no_aa); false }
+    { let _ = (img, font_name, text, px, py, size_px, color, shadow, max_limit, no_aa, vertical); false }
 }
 
 /// GDI フォントの internal leading を返す。
 pub fn font_internal_leading(font_name: &str, size_px: f32, no_aa: bool) -> i32 {
     #[cfg(windows)]
     {
-        if let Some(sess) = GdiSession::new(font_name, size_px, no_aa) {
+        if let Some(sess) = GdiSession::new(font_name, size_px, no_aa, false) {
             return sess.internal_leading();
         }
     }
@@ -193,12 +254,12 @@ pub fn font_internal_leading(font_name: &str, size_px: f32, no_aa: bool) -> i32 
     0
 }
 
-/// GDI でテキスト幅を計測する。
-pub fn measure_text_gdi(font_name: &str, text: &str, size_px: f32, no_aa: bool) -> Option<f32> {
+/// GDI でテキストの送り幅を計測する（縦書きでは列の長さを返す）。
+pub fn measure_text_gdi(font_name: &str, text: &str, size_px: f32, no_aa: bool, vertical: bool) -> Option<f32> {
     #[cfg(windows)]
-    { measure_text_gdi_impl(font_name, text, size_px, no_aa) }
+    { measure_text_gdi_impl(font_name, text, size_px, no_aa, vertical) }
     #[cfg(not(windows))]
-    { let _ = (font_name, text, size_px, no_aa); None }
+    { let _ = (font_name, text, size_px, no_aa, vertical); None }
 }
 
 /// raw_buf を img に合成する（preview.rs から直接呼ぶ用）。
@@ -228,47 +289,58 @@ fn draw_text_gdi_impl(
     size_px: f32,
     color: Rgb,
     shadow: Option<(Rgb, bool)>,
-    max_x: Option<i32>,
+    max_limit: Option<TextLimit>,
     no_aa: bool,
+    vertical: bool,
 ) -> bool {
-    let mut sess = match GdiSession::new(font_name, size_px, no_aa) {
+    let mut sess = match GdiSession::new(font_name, size_px, no_aa, vertical) {
         Some(s) => s,
         None => return false,
     };
-    let clipped = match max_x {
-        Some(mx) => sess.clip_to_max_x(text, px, mx),
+    // クリップの起点は送り方向の開始座標（横書き=px、縦書き=py）
+    let clipped = match max_limit {
+        Some(m) => sess.clip_to_max(text, if vertical { py } else { px }, m.pos, m.include_straddling),
         None => text.to_string(),
     };
     let text = clipped.as_str();
     if text.is_empty() { return true; }
 
-    // 実際のテキスト幅を GDI で計測してからビットマップサイズを決める
-    let measured_w = sess.measure(text);
-    let w = (measured_w + 4.0) as i32;
-    let h = (size_px * 1.5 + 4.0) as i32;
-    if w == 0 || h == 0 { return false; }
+    // 実際のテキスト送り幅を GDI で計測してからビットマップサイズを決める
+    // 縦書きでは幅と高さの役割が入れ替わる（幅=セルの厚み、高さ=列の長さ）
+    let measured = sess.measure(text);
+    let (w, h) = if vertical {
+        ((size_px * 1.5 + 4.0) as i32, (measured + 4.0) as i32)
+    } else {
+        ((measured + 4.0) as i32, (size_px * 1.5 + 4.0) as i32)
+    };
+    // 非正のサイズは DIBSection を確保できず、バッファ長計算も破綻する
+    if w <= 0 || h <= 0 { return false; }
 
-    sess.ensure_bmp(w, h);
+    if !sess.ensure_bmp(w, h) { return false; }
     sess.render_to_bmp(text, w, h);
     let stride = sess.bmp_stride();
     let alpha_mask: Vec<u32> = sess.raw_buf[..(stride * h) as usize].to_vec();
 
+    // 縦書きでは px が「列の右端」を指すため、貼り付けは左へ w 分ずらす
+    // （render_to_bmp が右端 2px マージンで描くため +2 して揃える）
+    let (bx, by) = if vertical { (px - w + 2, py) } else { (px, py) };
+
     if let Some((sc, is_outline)) = shadow {
         if is_outline {
             for (ddx, ddy) in [(-1i32,-1i32),(0,-1),(1,-1),(-1,0),(1,0),(-1,1),(0,1),(1,1)] {
-                paste_alpha_raw(img, &alpha_mask, stride, w, h, px + ddx, py + ddy, sc);
+                paste_alpha_raw(img, &alpha_mask, stride, w, h, bx + ddx, by + ddy, sc);
             }
         } else {
-            paste_alpha_raw(img, &alpha_mask, stride, w, h, px + 1, py + 1, sc);
+            paste_alpha_raw(img, &alpha_mask, stride, w, h, bx + 1, by + 1, sc);
         }
     }
-    paste_alpha_raw(img, &alpha_mask, stride, w, h, px, py, color);
+    paste_alpha_raw(img, &alpha_mask, stride, w, h, bx, by, color);
     true
 }
 
 #[cfg(windows)]
-fn measure_text_gdi_impl(font_name: &str, text: &str, size_px: f32, no_aa: bool) -> Option<f32> {
-    let sess = GdiSession::new(font_name, size_px, no_aa)?;
+fn measure_text_gdi_impl(font_name: &str, text: &str, size_px: f32, no_aa: bool, vertical: bool) -> Option<f32> {
+    let sess = GdiSession::new(font_name, size_px, no_aa, vertical)?;
     Some(sess.measure(text))
 }
 
@@ -308,35 +380,42 @@ fn to_wide(s: &str) -> Vec<u16> {
 /// フォント名でHFONTを作成する。
 /// CreateFontW 後に GetTextFaceW で実際のフォント名を確認し、
 /// 要求したフォントと異なる場合はＭＳ ゴシックで再作成する。
+/// vertical のときは縦書き用異体（@付きフォント名）+ escapement 2700 で作成し、
+/// 異体が存在しない場合は @ＭＳ ゴシックに差し替える（SSP仕様相当）。
 #[cfg(windows)]
-fn create_gdi_font(font_name: &str, size_px: f32, no_aa: bool) -> HFONT {
+fn create_gdi_font(font_name: &str, size_px: f32, no_aa: bool, vertical: bool) -> HFONT {
     let first = font_name.split(',').next().unwrap_or(font_name).trim();
     let height = -(size_px.round() as i32);
     let quality = if no_aa { NONANTIALIASED_QUALITY.0 } else { DEFAULT_QUALITY.0 };
+    let escapement = if vertical { 2700 } else { 0 };
+    let request = if vertical { format!("@{}", first) } else { first.to_string() };
 
     unsafe {
-        let hfont = create_hfont(first, height, quality);
+        let hfont = create_hfont(&request, height, quality, escapement);
 
         // 実際に選択されたフォント名を確認する
+        // 縦書き時は "@ＭＳ ゴシック" のように @ 付きで返るため、@ を外して照合する
         let actual = get_hfont_face(&hfont);
-        if font_was_substituted(first, &actual) {
+        let actual_face = actual.strip_prefix('@').unwrap_or(&actual);
+        if font_was_substituted(first, actual_face) {
             // GDI が別フォントにフォールバックした → ＭＳ ゴシックで作り直す
             let _ = DeleteObject(hfont);
             // ＭＳ ゴシックは固定ピッチ・ノンアンチエイリアスで作成
-            create_hfont_ms_gothic(height)
+            create_hfont_ms_gothic(height, vertical)
         } else {
             hfont
         }
     }
 }
 
-/// HFONT を作成する（内部ヘルパー）
+/// HFONT を作成する（内部ヘルパー）。
+/// escapement は 0.1 度単位（縦書きは 2700）。nOrientation にも同値を渡す。
 #[cfg(windows)]
-unsafe fn create_hfont(name: &str, height: i32, quality: u8) -> HFONT {
+unsafe fn create_hfont(name: &str, height: i32, quality: u8, escapement: i32) -> HFONT {
     let wide = to_wide(name);
     unsafe {
         CreateFontW(
-            height, 0, 0, 0,
+            height, 0, escapement, escapement,
             FW_NORMAL.0 as i32, 0, 0, 0,
             DEFAULT_CHARSET.0 as u32,
             OUT_TT_PRECIS.0 as u32,
@@ -350,11 +429,13 @@ unsafe fn create_hfont(name: &str, height: i32, quality: u8) -> HFONT {
 
 /// ＭＳ ゴシックを固定ピッチ・ノンアンチエイリアスで作成する
 #[cfg(windows)]
-unsafe fn create_hfont_ms_gothic(height: i32) -> HFONT {
-    let wide = to_wide("ＭＳ ゴシック");
+unsafe fn create_hfont_ms_gothic(height: i32, vertical: bool) -> HFONT {
+    let name = if vertical { "@ＭＳ ゴシック" } else { "ＭＳ ゴシック" };
+    let escapement = if vertical { 2700 } else { 0 };
+    let wide = to_wide(name);
     unsafe {
         CreateFontW(
-            height, 0, 0, 0,
+            height, 0, escapement, escapement,
             FW_NORMAL.0 as i32, 0, 0, 0,
             DEFAULT_CHARSET.0 as u32,
             OUT_TT_PRECIS.0 as u32,

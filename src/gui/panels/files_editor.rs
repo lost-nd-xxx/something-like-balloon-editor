@@ -216,7 +216,7 @@ fn draw_editor_ui(
     egui::CollapsingHeader::new("📋 書式・色種別について")
         .default_open(false)
         .show(ui, |ui| {
-            ui.label("書式:  バルーン名,ファイル名:色種別,...  （奥レイヤーから順に記述）");
+            ui.label("書式:  バルーン名,ファイル名:色種別,...  (奥レイヤーから順に記述)");
             ui.add_space(4.0);
             ui.label("色種別:");
             egui::Grid::new("color_type_help").num_columns(2).spacing([8.0, 2.0]).show(ui, |ui| {
@@ -315,7 +315,7 @@ fn draw_editor_ui(
                         let frame = if is_dup {
                             egui::Frame::group(ui.style())
                                 .fill(egui::Color32::from_rgba_unmultiplied(180, 60, 60, 40))
-                                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 80, 80)))
+                                .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(180, 80, 80)))
                         } else {
                             egui::Frame::group(ui.style())
                         };
@@ -326,7 +326,7 @@ fn draw_editor_ui(
 
                             // --- ヘッダ行 ---
                             ui.horizontal(|ui| {
-                                if ui.small_button("→コメント").on_hover_text("コメント行（// ）に変換").clicked() {
+                                if ui.small_button("→コメント").on_hover_text("コメント行(// )に変換").clicked() {
                                     to_convert_comment = Some(i);
                                 }
 
@@ -368,7 +368,7 @@ fn draw_editor_ui(
                                 let toggle_hint  = if is_c {
                                     "balloons/k/pdef 系に切り替え"
                                 } else {
-                                    "balloonc（入力ボックス）系に切り替え"
+                                    "balloonc(入力ボックス)系に切り替え"
                                 };
                                 if ui.small_button(toggle_label).on_hover_text(toggle_hint).clicked() {
                                     *scope = if is_c {
@@ -387,7 +387,7 @@ fn draw_editor_ui(
                                     ui.horizontal(|ui| {
                                         ui.label(format!("  L{}:", li + 1));
                                         egui::ComboBox::from_id_salt(("fname", i, li))
-                                            .selected_text(if layer.filename.is_empty() { "（未選択）".to_string() } else { layer.filename.clone() })
+                                            .selected_text(if layer.filename.is_empty() { "(未選択)".to_string() } else { layer.filename.clone() })
                                             .width(200.0)
                                             .show_ui(ui, |ui| {
                                                 for fname in png_files {
@@ -595,10 +595,17 @@ pub fn show(app: &mut BalloonEditorApp, ctx: &Context) {
             }
 
             if confirm_open {
+                // このビューポート内の背後（エディタ本体）をグレーアウトし入力も遮断する
+                crate::gui::app::draw_modal_backdrop(
+                    vp_ctx,
+                    "files_editor_modal_blocker",
+                    egui::Order::Foreground,
+                );
                 egui::Window::new("未適用の変更があります")
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .order(egui::Order::Tooltip)
                     .show(vp_ctx, |ui| {
                         ui.label("変更が適用されていません。どうしますか？");
                         ui.add_space(8.0);
