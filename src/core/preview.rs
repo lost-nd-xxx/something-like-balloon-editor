@@ -599,11 +599,30 @@ fn measure_text(font_name: &str, font: Option<&fontdue::Font>, text: &str, size_
 // ValidRect
 // ---------------------------------------------------------------------------
 
+/// origin.x/y が実質的に指定されているか（キーがあり、かつ値が 0 でないか）。
+///
+/// `0` は未指定と同じ扱いのため、オーバーレイの開始点マーカーも表示しない。
+fn has_explicit_origin(parsed: &HashMap<String, String>, w: i32, h: i32) -> bool {
+    let nonzero = |key: &str, size: i32| {
+        parsed.get(key).map(|raw| pos_str(raw, size) != 0).unwrap_or(false)
+    };
+    nonzero("origin.x", w) || nonzero("origin.y", h)
+}
+
 /// origin.x/y（テキスト開始位置）を解決する。
 ///
 /// SSP 2.8.84 で実機確認済み: 横書き・縦書きとも**画像基準**の `pos_str` 規則
 /// （正値=左/上起点、負値=右/下起点）。validrect 基準ではない。
 /// 未指定時は validrect の定義に従う（横書き=左上、縦書き=右上）。
+///
+/// ただし `0` は「未指定」と同じ扱いにする。UKADOC の座標規則（*1）は符号の
+/// 意味だけを定めており、これに従えば `origin.x,0` は左起点の 0 と読める。
+/// しかし SSP 実機は validrect に従った位置に描画するため、その挙動に合わせた。
+/// 絶対座標の 0 と解釈すると、横書きでは画像の左上端から描き始め、縦書きでは
+/// 1列目の右端が x=0 となり列が画像の外（左方向）へ出て不可視になる。
+///
+/// 既存素材には未指定の意味で `origin.x,0` と明示的に書いてあるものがあり、
+/// 同梱のサンプル素材もそう書かれている。
 ///
 /// 戻り値の x は、横書きでは行の左端、縦書きでは1列目の右端を意味する。
 fn resolve_origin(
@@ -613,14 +632,15 @@ fn resolve_origin(
     h: i32,
     vertical: bool,
 ) -> (i32, i32) {
-    let x = match parsed.get("origin.x") {
-        Some(raw) => pos_str(raw, w),
-        None => if vertical { vr.right } else { vr.left },
+    // 値が 0（および数値として解釈できない表記）は未指定とみなす
+    let explicit = |key: &str, size: i32| -> Option<i32> {
+        let raw = parsed.get(key)?;
+        let v = pos_str(raw, size);
+        if v == 0 { None } else { Some(v) }
     };
-    let y = match parsed.get("origin.y") {
-        Some(raw) => pos_str(raw, h),
-        None => vr.top,
-    };
+    let x = explicit("origin.x", w)
+        .unwrap_or(if vertical { vr.right } else { vr.left });
+    let y = explicit("origin.y", h).unwrap_or(vr.top);
     (x, y)
 }
 
@@ -1474,7 +1494,7 @@ fn draw_overlay(
 
         // origin.x/y が指定されているとき、テキスト実開始点を緑の十字で表示
         // （縦書き時の x は「1列目の右端」。算出は本体と同じ resolve_origin に揃える）
-        if parsed.contains_key("origin.x") || parsed.contains_key("origin.y") {
+        if has_explicit_origin(parsed, iw, ih) {
             let (tx, ty) = resolve_origin(parsed, &vr, iw, ih, vertical);
             draw_cross(img, tx, ty, Rgb(0, 200, 0), Rgb(0, 200, 0));
         }
@@ -1604,3 +1624,67 @@ fn draw_cross(img: &mut RgbaImage, cx: i32, cy: i32, outer: Rgb, inner: Rgb) {
 }
 
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parsed(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    /// `origin.x,0` / `origin.y,0` は「未指定」と同じく validrect に従う
+    /// （SSP 実機の挙動に合わせたもの。座標規則そのものは 0 を特別扱いしない）。
+    /// 絶対座標 0 と解釈すると横書きは画像左上から描き始め、
+    /// 縦書きは1列目の右端が x=0 となり画像の外へ出て不可視になる。
+    #[test]
+    fn origin_zero_falls_back_to_validrect() {
+        // 同梱サンプル素材と同じ設定
+        let p = parsed(&[
+            ("origin.x", "0"), ("origin.y", "0"),
+            ("validrect.left", "28"), ("validrect.top", "14"),
+            ("validrect.right", "-48"), ("validrect.bottom", "-24"),
+        ]);
+        let (w, h) = (500, 200);
+        let vr = build_valid_rect(&p, w, h);
+
+        // 横書き: 行左端は validrect.left
+        assert_eq!(resolve_origin(&p, &vr, w, h, false), (vr.left, vr.top));
+        // 縦書き: 1列目の右端は validrect.right
+        assert_eq!(resolve_origin(&p, &vr, w, h, true), (vr.right, vr.top));
+
+        // 0 は指定なし扱いのため開始点マーカーも出さない
+        assert!(!has_explicit_origin(&p, w, h));
+    }
+
+    /// 0 以外を指定したときは画像基準の pos_str 規則で解決する（validrect に加算しない）。
+    #[test]
+    fn origin_nonzero_is_image_based() {
+        let p = parsed(&[
+            ("origin.x", "100"), ("origin.y", "-30"),
+            ("validrect.left", "28"), ("validrect.top", "14"),
+            ("validrect.right", "-48"), ("validrect.bottom", "-24"),
+        ]);
+        let (w, h) = (500, 200);
+        let vr = build_valid_rect(&p, w, h);
+
+        // validrect.left(28) を足した 128 ではなく 100
+        assert_eq!(resolve_origin(&p, &vr, w, h, false), (100, h - 30));
+        assert!(has_explicit_origin(&p, w, h));
+    }
+
+    /// 未指定時は横書き=左上、縦書き=右上（UKADOC の既定）。
+    #[test]
+    fn origin_absent_uses_validrect() {
+        let p = parsed(&[
+            ("validrect.left", "28"), ("validrect.top", "14"),
+            ("validrect.right", "-48"), ("validrect.bottom", "-24"),
+        ]);
+        let (w, h) = (500, 200);
+        let vr = build_valid_rect(&p, w, h);
+
+        assert_eq!(resolve_origin(&p, &vr, w, h, false), (vr.left, vr.top));
+        assert_eq!(resolve_origin(&p, &vr, w, h, true), (vr.right, vr.top));
+        assert!(!has_explicit_origin(&p, w, h));
+    }
+}
