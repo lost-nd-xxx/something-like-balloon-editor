@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use image::{RgbaImage, Rgba};
 use crate::core::color::Rgb;
-use crate::core::descript::{parse_descript, get_color_from_descript, pos_str, get_aliased};
+use crate::core::descript::{parse_descript, get_color_from_descript, get_coord, pos_str, get_aliased};
 use crate::core::gdi_text;
 
 #[cfg(windows)]
@@ -890,10 +890,10 @@ fn draw_communicatebox(
 ) {
     let (iw, ih) = (img.width() as i32, img.height() as i32);
 
-    let cb_x: i32 = parsed.get("communicatebox.x").and_then(|s| s.parse().ok()).unwrap_or(10);
-    let cb_y: i32 = parsed.get("communicatebox.y").and_then(|s| s.parse().ok()).unwrap_or(10);
-    let cb_w: i32 = parsed.get("communicatebox.width").and_then(|s| s.parse().ok()).unwrap_or(100);
-    let cb_h: i32 = parsed.get("communicatebox.height").and_then(|s| s.parse().ok()).unwrap_or(30);
+    let cb_x: i32 = get_coord(&parsed, "communicatebox.x", 10);
+    let cb_y: i32 = get_coord(&parsed, "communicatebox.y", 10);
+    let cb_w: i32 = get_coord(&parsed, "communicatebox.width", 100);
+    let cb_h: i32 = get_coord(&parsed, "communicatebox.height", 30);
 
     let bl = cb_x.max(0).min(iw - 1);
     let bt = (if cb_y < 0 { ih + cb_y } else { cb_y }).max(0).min(ih - 1);
@@ -1689,10 +1689,10 @@ fn draw_overlay(
     let red   = Rgb(255, 0, 0);
 
     if is_balloonc {
-        let cb_x: i32 = parsed.get("communicatebox.x").and_then(|s| s.parse().ok()).unwrap_or(10);
-        let cb_y: i32 = parsed.get("communicatebox.y").and_then(|s| s.parse().ok()).unwrap_or(10);
-        let cb_w: i32 = parsed.get("communicatebox.width").and_then(|s| s.parse().ok()).unwrap_or(100);
-        let cb_h: i32 = parsed.get("communicatebox.height").and_then(|s| s.parse().ok()).unwrap_or(30);
+        let cb_x: i32 = get_coord(&parsed, "communicatebox.x", 10);
+        let cb_y: i32 = get_coord(&parsed, "communicatebox.y", 10);
+        let cb_w: i32 = get_coord(&parsed, "communicatebox.width", 100);
+        let cb_h: i32 = get_coord(&parsed, "communicatebox.height", 30);
         let bl = cb_x.max(0).min(iw - 1);
         let bt = (if cb_y < 0 { ih + cb_y } else { cb_y }).max(0).min(ih - 1);
         let br = (bl + cb_w).min(iw) - 1;

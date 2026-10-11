@@ -125,14 +125,31 @@ pub fn diff_against_descript(individual_text: &str, descript_text: &str) -> Stri
     }
 }
 
+/// 座標・寸法として受け付ける値の絶対値の上限（px）。
+///
+/// descript.txt 由来の値は i32 の全域を取りうる。そのまま使うと後段の座標計算
+/// （`x + width` など）があふれ、debug ビルドでは panic する。現実の画像サイズを
+/// 十分に上回る範囲へ読み取り時点で丸めることで、以降の加減算を安全にする。
+pub const COORD_LIMIT: i32 = 1_000_000;
+
+/// 座標・寸法の値をパースし、±`COORD_LIMIT` に丸めて返す。不正値は None。
+pub fn parse_coord(raw: &str) -> Option<i32> {
+    raw.trim().parse::<i32>().ok().map(|v| v.clamp(-COORD_LIMIT, COORD_LIMIT))
+}
+
+/// parsed から座標・寸法の値を取得する（±`COORD_LIMIT` に丸める）。未定義・不正値は default。
+pub fn get_coord(parsed: &HashMap<String, String>, key: &str, default: i32) -> i32 {
+    parsed.get(key).and_then(|s| parse_coord(s)).unwrap_or(default)
+}
+
 /// マイナス値座標の変換。
 /// raw が "-" 始まりのとき `size + val`（右下基点）、そうでなければ `val`（左上基点）。
 ///
-/// raw は外部ファイル（descript.txt）由来で i32 の全域を取りうるため、
-/// 加算は飽和演算で行う（debug ビルドでの overflow panic を避ける）。
+/// raw は外部ファイル（descript.txt）由来のため、値は ±`COORD_LIMIT` に丸めてから使う。
+/// 加算も飽和演算で行う（debug ビルドでの overflow panic を避ける）。
 pub fn pos_str(raw: &str, size: i32) -> i32 {
     let negative = raw.starts_with('-');
-    let val: i32 = raw.parse().unwrap_or(0);
+    let val: i32 = parse_coord(raw).unwrap_or(0);
     if negative { size.saturating_add(val) } else { val }
 }
 
@@ -289,6 +306,20 @@ mod tests {
     }
 
     /// pos_str の符号規則（別名対応の前提となる挙動）
+    #[test]
+    fn coord_values_are_clamped() {
+        assert_eq!(parse_coord("2147483647"), Some(COORD_LIMIT));
+        assert_eq!(parse_coord("-2147483648"), Some(-COORD_LIMIT));
+        assert_eq!(parse_coord(" 460 "), Some(460));
+        assert_eq!(parse_coord("abc"), None);
+        assert_eq!(pos_str("2147483647", 506), COORD_LIMIT);
+        assert_eq!(pos_str("-2147483648", 506), 506 - COORD_LIMIT);
+        let mut parsed = HashMap::new();
+        parsed.insert("communicatebox.width".to_string(), "2147483647".to_string());
+        assert_eq!(get_coord(&parsed, "communicatebox.width", 100), COORD_LIMIT);
+        assert_eq!(get_coord(&parsed, "communicatebox.height", 30), 30);
+    }
+
     #[test]
     fn pos_str_sign_rule() {
         assert_eq!(pos_str("100", 506), 100);    // 正値＝左/上起点

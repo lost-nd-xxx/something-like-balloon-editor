@@ -1,7 +1,7 @@
 use egui::{Context, Ui, Vec2};
 use crate::gui::app::BalloonEditorApp;
 use crate::gui::state::{CanvasBg, DragEditTarget, DragState, RectEdge, ZOOM_STEPS};
-use crate::core::descript::{parse_descript, set_descript_value, set_descript_value_aliased, pos_str, get_aliased};
+use crate::core::descript::{parse_descript, set_descript_value, set_descript_value_aliased, get_coord, pos_str, get_aliased};
 use image::RgbaImage;
 
 /// field_def の ACCORDION_GROUPS からキー→デフォルト値のマップを構築する
@@ -521,10 +521,10 @@ fn cb_edge_current_val(
     parsed: &std::collections::HashMap<String, String>,
     ih: i32,
 ) -> (i32, i32) {
-    let cb_x: i32 = parsed.get("communicatebox.x").and_then(|s| s.parse().ok()).unwrap_or(10);
+    let cb_x: i32 = get_coord(&parsed, "communicatebox.x", 10);
     let cb_y: i32 = pos_str(parsed.get("communicatebox.y").map(|s| s.as_str()).unwrap_or("10"), ih);
-    let cb_w: i32 = parsed.get("communicatebox.width").and_then(|s| s.parse().ok()).unwrap_or(100);
-    let cb_h: i32 = parsed.get("communicatebox.height").and_then(|s| s.parse().ok()).unwrap_or(30);
+    let cb_w: i32 = get_coord(&parsed, "communicatebox.width", 100);
+    let cb_h: i32 = get_coord(&parsed, "communicatebox.height", 30);
     match edge {
         RectEdge::Left   => (cb_x, 0),
         RectEdge::Top    => (0, cb_y),
@@ -557,10 +557,10 @@ fn detect_edge(
             ]
         }
         DragEditTarget::CommunicateBox => {
-            let cb_x = parsed.get("communicatebox.x").and_then(|s| s.parse::<i32>().ok()).unwrap_or(10) as f32;
+            let cb_x = get_coord(&parsed, "communicatebox.x", 10) as f32;
             let cb_y = pos_str(parsed.get("communicatebox.y").map(|s| s.as_str()).unwrap_or("10"), ih) as f32;
-            let cb_w = parsed.get("communicatebox.width").and_then(|s| s.parse::<i32>().ok()).unwrap_or(100) as f32;
-            let cb_h = parsed.get("communicatebox.height").and_then(|s| s.parse::<i32>().ok()).unwrap_or(30) as f32;
+            let cb_w = get_coord(&parsed, "communicatebox.width", 100) as f32;
+            let cb_h = get_coord(&parsed, "communicatebox.height", 30) as f32;
             vec![
                 (RectEdge::Left,   (mx - cb_x).abs()),
                 (RectEdge::Top,    (my - cb_y).abs()),
@@ -717,10 +717,10 @@ fn clamp_val(
         DragEditTarget::CommunicateBox => {
             const MIN_GAP: i32 = 10;
             let parsed = parse_descript(descript_text);
-            let cb_x: i32 = parsed.get("communicatebox.x").and_then(|s| s.parse().ok()).unwrap_or(10);
+            let cb_x: i32 = get_coord(&parsed, "communicatebox.x", 10);
             let cb_y = pos_str(parsed.get("communicatebox.y").map(|s| s.as_str()).unwrap_or("10"), ih);
-            let cb_w: i32 = parsed.get("communicatebox.width").and_then(|s| s.parse().ok()).unwrap_or(100);
-            let cb_h: i32 = parsed.get("communicatebox.height").and_then(|s| s.parse().ok()).unwrap_or(30);
+            let cb_w: i32 = get_coord(&parsed, "communicatebox.width", 100);
+            let cb_h: i32 = get_coord(&parsed, "communicatebox.height", 30);
             match edge {
                 Some(RectEdge::Left) => {
                     let right = cb_x + cb_w;
@@ -853,11 +853,11 @@ fn write_val_to_descript(
         }
         DragEditTarget::CommunicateBox => {
             let p = parse_descript(&text);
-            let cb_x: i32 = p.get("communicatebox.x").and_then(|s| s.parse().ok()).unwrap_or(10);
+            let cb_x: i32 = get_coord(&p, "communicatebox.x", 10);
             let cb_y_raw = p.get("communicatebox.y").cloned().unwrap_or_else(|| "10".to_string());
             let cb_y = pos_str(&cb_y_raw, ih);
-            let cb_w: i32 = p.get("communicatebox.width").and_then(|s| s.parse().ok()).unwrap_or(100);
-            let cb_h: i32 = p.get("communicatebox.height").and_then(|s| s.parse().ok()).unwrap_or(30);
+            let cb_w: i32 = get_coord(&p, "communicatebox.width", 100);
+            let cb_h: i32 = get_coord(&p, "communicatebox.height", 30);
             match edge {
                 Some(RectEdge::Left) => {
                     let new_w = (cb_x + cb_w - val.0).max(1);
