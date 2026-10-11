@@ -181,6 +181,14 @@ pub fn composite_layers(layers: &[RgbaImage]) -> anyhow::Result<RgbaImage> {
     Ok(result)
 }
 
+/// 不透明な単色 bg を最背面に敷いて合成する（結果は全画素が不透明になる）
+pub fn fill_background(img: &RgbaImage, bg: Rgb) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let back = RgbaImage::from_pixel(w, h, Rgba([bg.r(), bg.g(), bg.b(), 255]));
+    // 2枚とも同サイズなので失敗しない
+    composite_layers(&[back, img.clone()]).unwrap_or_else(|_| img.clone())
+}
+
 /// 画像を左右反転する
 pub fn flip_horizontal(img: &RgbaImage) -> RgbaImage {
     image::imageops::flip_horizontal(img)
@@ -350,4 +358,19 @@ pub fn sample_center_color(img: &RgbaImage, sample_ratio: f32) -> Rgb {
         (sum_g / count) as u8,
         (sum_b / count) as u8,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fill_background_removes_transparency() {
+        let mut img = RgbaImage::new(2, 1);
+        img.put_pixel(0, 0, Rgba([0, 0, 0, 0]));
+        img.put_pixel(1, 0, Rgba([10, 20, 30, 255]));
+        let out = fill_background(&img, Rgb(200, 100, 50));
+        assert_eq!(*out.get_pixel(0, 0), Rgba([200, 100, 50, 255]));
+        assert_eq!(*out.get_pixel(1, 0), Rgba([10, 20, 30, 255]));
+    }
 }

@@ -6,6 +6,7 @@ balloonc1,c_edge.png:edge,c_base.png:base,c1_text.png:text
 balloonc2,c_edge.png:edge,c_base.png:base,c2_text.png:text
 balloonc3,c_edge.png:edge,c_base.png:base,c3_text.png:text
 balloonc4,c_edge.png:edge,c_base.png:base,c4_text.png:text
+balloonc5,c5_edge.png:edge,c5_base.png:base,c5_text.png:text
 
 balloons0,s0_edge.png:edge,s0_base.png:base
 balloons2,s2_edge.png:edge,s2_base.png:base

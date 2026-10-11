@@ -165,21 +165,8 @@ impl BalloonEditorApp {
             }
         };
 
-        let balloon_name = self.state.selected_balloon.trim_end_matches(".png").to_string();
-        let cfg_key = format!("{}s.txt", balloon_name);
         // 個別設定と共通設定をマージ（個別設定が優先、差分ファイル仕様に対応）
-        // 共通設定をベースに個別設定のキーを上書きしたテキストを生成する
-        let descript_text = if let Some(indiv) = self.state.individual_texts.get(&cfg_key) {
-            let indiv_parsed = crate::core::descript::parse_descript(indiv);
-            let mut merged = self.state.descript_text.clone();
-            for (k, v) in &indiv_parsed {
-                // 別名表記の違い（number.xr と number.x 等）で両方の行が残らないようにする
-                merged = crate::core::descript::set_descript_value_aliased(&merged, k, v);
-            }
-            merged
-        } else {
-            self.state.descript_text.clone()
-        };
+        let descript_text = self.state.effective_descript_text();
 
         let empty_map = std::collections::HashMap::new();
         let parts = self.state.parts_cache
@@ -825,6 +812,22 @@ files.txt の定義を削除しますか？",
         self.export_body(output_dir);
     }
 
+    /// 出力時に入力ボックスのボタン画像の最背面へ敷く地色。
+    /// 色変えありなら base 色、色変えしないモードでは出力する balloonc 画像から採色する。
+    fn input_button_background(&self, balloon_images: &std::collections::HashMap<String, RgbaImage>) -> crate::core::color::Rgb {
+        let cs = self.state.color_set();
+        if !cs.no_color {
+            return cs.base;
+        }
+        let mut names: Vec<&String> = balloon_images.keys()
+            .filter(|n| n.to_lowercase().starts_with("balloonc"))
+            .collect();
+        names.sort();
+        names.first()
+            .map(|n| crate::core::composer::sample_center_color(&balloon_images[*n], 0.1))
+            .unwrap_or(cs.base)
+    }
+
     /// 出力処理の本体（出力先フォルダの確認が済んだ後に呼ばれる）
     fn export_body(&mut self, output_dir: std::path::PathBuf) {
         let Some(ad) = self.state.asset_dir() else {
@@ -861,9 +864,20 @@ files.txt の定義を削除しますか？",
         }
 
         // パーツ画像を出力（先頭バルーンのキャッシュを代表として使う）
+        // 入力ボックスのボタン（ok/cancel/mode）は全透明領域があると SSP が左上1pxの色で
+        // 埋めてしまうため、最背面に地色を敷いて全透明領域を無くす。
+        let button_bg = self.input_button_background(&balloon_images);
         if let Some(parts) = self.state.parts_cache.values().next() {
             for (name, img) in parts {
                 let path = output_dir.join(name);
+                let lower = name.to_lowercase();
+                let filled;
+                let img = if ["ok_", "cancel_", "mode_"].iter().any(|p| lower.starts_with(p)) {
+                    filled = crate::core::composer::fill_background(img, button_bg);
+                    &filled
+                } else {
+                    img
+                };
                 if let Err(e) = save_png_optimized(img, &path) {
                     self.err(format!("{} の保存に失敗しました:\n{}", name, e));
                     return;
@@ -1032,7 +1046,7 @@ files.txt の定義を削除しますか？",
         } else if stem.starts_with("balloonc") {
             self.state.import_category = "balloonc".to_string();
             let id_str = stem.strip_prefix("balloonc").unwrap_or("0");
-            self.state.import_balloonc_id = id_str.parse().unwrap_or(0).min(4);
+            self.state.import_balloonc_id = id_str.parse().unwrap_or(0).min(5);
         } else if stem.starts_with("balloonp") && stem.contains("def") {
             self.state.import_category = "balloon".to_string();
             self.state.import_is_scope_specific = true;
@@ -1215,6 +1229,8 @@ files.txt の定義を削除しますか？",
 
 impl eframe::App for BalloonEditorApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        self.state.end_color_undo_session_if_closed(ctx);
+
         // ウィンドウ「×」やショートカットによる終了要求をインターセプトする。
         // 未保存編集があり、まだ終了許可が出ていなければ閉じるのを取り消して確認ダイアログを出す。
         if ctx.input(|i| i.viewport().close_requested()) && !self.state.allow_close {
@@ -1815,10 +1831,10 @@ impl eframe::App for BalloonEditorApp {
                         ui.add_space(4.0);
 
                         if self.state.rename_balloon_is_c {
-                            // c系: ID番号 0〜4
+                            // c系: ID番号 0〜5
                             ui.horizontal(|ui| {
                                 ui.label("ID番号:");
-                                ui.add(egui::DragValue::new(&mut self.state.rename_id_num).range(0..=4));
+                                ui.add(egui::DragValue::new(&mut self.state.rename_id_num).range(0..=5));
                             });
                         } else {
                             // s/k/p系: スコープ番号 + ID番号
@@ -1956,10 +1972,12 @@ impl eframe::App for BalloonEditorApp {
                         ui.add_space(6.0);
 
                         // カテゴリ選択（左）＋ パラメータ（中）＋ プレビュー（右）の左右分割レイアウト
+                        // 各カラムは幅を固定する（最小幅だけだと中央の内容に応じてウィンドウ幅が変わり、
+                        // カテゴリ切り替えのたびにガタつくため）。中央は最も広い項目に余裕を持たせた幅
                         ui.horizontal(|ui| {
                             // 左側: カテゴリ縦リスト
                             ui.vertical(|ui| {
-                                ui.set_min_width(160.0);
+                                ui.set_width(160.0);
                                 ui.label("カテゴリ:");
                                 for (key, label) in &[
                                     // 基本
@@ -1991,7 +2009,7 @@ impl eframe::App for BalloonEditorApp {
                             // 右側: 選択カテゴリのパラメータ
                             let cat = self.state.import_category.clone();
                             ui.vertical(|ui| {
-                                ui.set_min_width(220.0);
+                                ui.set_width(320.0);
                                 match cat.as_str() {
                                     "free" => {
                                         ui.label("保存ファイル名:");
@@ -2018,22 +2036,19 @@ impl eframe::App for BalloonEditorApp {
                                         ui.radio_value(&mut self.state.import_inputbtn_state, "down".to_string(), "押下 (down)");
                                     }
                                     "balloonc" => {
-                                        ui.horizontal(|ui| {
-                                            ui.label("ID番号:");
-                                            egui::ComboBox::from_id_salt("balloonc_id")
-                                                .selected_text(self.state.import_balloonc_id.to_string())
-                                                .show_ui(ui, |ui| {
-                                                    for (i, desc) in [
-                                                        "0: Send ボックス",
-                                                        "1: Communicate ボックス",
-                                                        "2: Teach ボックス",
-                                                        "3: Input ボックス",
-                                                        "4: Address Bar (SSP専用)",
-                                                    ].iter().enumerate() {
-                                                        ui.selectable_value(&mut self.state.import_balloonc_id, i, *desc);
-                                                    }
-                                                });
-                                        });
+                                        // ComboBox の選択肢（Order::Foreground）はこのウィンドウ（Order::Tooltip）の
+                                        // 背後に描かれて操作できなくなるため、ラジオボタンで選ばせる
+                                        ui.label("ID番号:");
+                                        for (i, desc) in [
+                                            "0: Send ボックス",
+                                            "1: Communicate ボックス",
+                                            "2: Teach ボックス",
+                                            "3: Input ボックス",
+                                            "4: Address Bar (SSP専用)",
+                                            "5: Textarea ボックス (SSP 2.9.10以降)",
+                                        ].iter().enumerate() {
+                                            ui.radio_value(&mut self.state.import_balloonc_id, i, *desc);
+                                        }
                                     }
                                     _ => {
                                         // balloon / arrow / clickwait / marker / sstp
@@ -2074,7 +2089,7 @@ impl eframe::App for BalloonEditorApp {
 
                             // 右側: インポート画像プレビュー
                             ui.vertical(|ui| {
-                                ui.set_min_width(180.0);
+                                ui.set_width(180.0);
                                 ui.label("プレビュー:");
                                 if let Some(tex) = &self.state.import_preview_texture {
                                     let [tw, th] = tex.size();

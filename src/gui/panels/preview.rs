@@ -290,9 +290,8 @@ fn handle_drag_edit(
         None => return,
     };
 
-    // descript テキストを取得
-    let descript_text = app.state.descript_text.clone();
-    let parsed = parse_descript(&descript_text);
+    // 個別設定があれば共通設定に上書きした値を使う（毎フレーム呼ばれるため軽量なマップ版）
+    let parsed = app.state.effective_parsed();
 
     // field_def のデフォルト値を dynamic_defaults にマージ（parsed になければ dynamic_defaults、
     // それもなければ field_def デフォルト、という優先順位にする）
@@ -427,11 +426,26 @@ fn handle_drag_edit(
     // ドラッグ終了 → クランプ補正してから descript に書き込みプレビュー再生成
     if interact.drag_stopped() {
         if let Some(ds) = app.state.drag_state.take() {
+            let descript_text = app.state.effective_descript_text();
             let clamped = clamp_val(&target, ds.current_val, ds.active_edge,
                                     &descript_text, iw, ih, parts);
             let new_text = write_val_to_descript(&target, &descript_text, clamped,
                                                   ds.active_edge, ds.was_negative, iw, ih);
-            app.state.descript_text = new_text;
+            let cfg_key = app.state.selected_cfg_key();
+            if let Some(indiv) = app.state.individual_texts.get(&cfg_key) {
+                // 個別設定があればそちらへ書き込む（設定パネルの数値入力と同じ扱い）。
+                // マージ済みテキストで変化したキーだけを個別設定に反映する
+                let before = parse_descript(&descript_text);
+                let mut indiv = indiv.clone();
+                for (k, v) in &parse_descript(&new_text) {
+                    if before.get(k) != Some(v) {
+                        indiv = set_descript_value_aliased(&indiv, k, v);
+                    }
+                }
+                app.state.individual_texts.insert(cfg_key, indiv);
+            } else {
+                app.state.descript_text = new_text;
+            }
             app.refresh_preview_texture(ctx);
         }
     }

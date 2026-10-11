@@ -577,6 +577,8 @@ fn show_color_widget(
     };
 
     let mut changed = false;
+    // パレット操作による変更ならそのポップアップ ID（Undo のまとめ記録に使う）
+    let mut picker_popup: Option<egui::Id> = None;
     let mut new_rgb = rgb_opt.unwrap_or(Rgb(0, 0, 0));
     let mut new_none = is_none;
 
@@ -598,11 +600,14 @@ fn show_color_widget(
 
         if !new_none {
             let mut color32 = rgb_to_color32(new_rgb);
+            // color_edit_button_srgba 内部と同じ算出方法でポップアップ ID を得る
+            let popup_id = ui.auto_id_with("popup");
             if egui::color_picker::color_edit_button_srgba(
                 ui, &mut color32, egui::color_picker::Alpha::Opaque,
             ).changed() {
                 new_rgb = color32_to_rgb(color32);
                 changed = true;
+                picker_popup = Some(popup_id);
             }
 
             // hex テキストボックス（編集中はバッファ、それ以外は committed_hex を表示）
@@ -642,7 +647,11 @@ fn show_color_widget(
     });
 
     if changed {
-        app.state.push_undo();
+        match picker_popup {
+            // パレット操作は開いてから閉じるまでを Undo 1回分にまとめる
+            Some(id) => app.state.push_undo_for_color_picker(id),
+            None => app.state.push_undo(),
+        }
         // 仕様通り .r/.g/.b 形式で書き込む（none の場合は .r に "none" を設定）
         let color_opt = if new_none { None } else { Some(new_rgb) };
         let new_text = set_color_in_descript(&descript_text, key, color_opt);

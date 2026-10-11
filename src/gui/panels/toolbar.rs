@@ -39,6 +39,8 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                 };
 
                 let mut egui_color = rgb_to_egui(display_color);
+                // color_edit_button_srgba 内部と同じ算出方法でポップアップ ID を得る
+                let popup_id = ui.auto_id_with("popup");
                 let picker_changed = egui::color_picker::color_edit_button_srgba(
                     ui,
                     &mut egui_color,
@@ -83,7 +85,12 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
 
                 if picker_changed || hex_committed {
                     let new_rgb = egui_to_rgb(egui_color);
-                    app.state.push_undo();
+                    if hex_committed {
+                        app.state.push_undo();
+                    } else {
+                        // パレット操作は開いてから閉じるまでを Undo 1回分にまとめる
+                        app.state.push_undo_for_color_picker(popup_id);
+                    }
                     if bulk {
                         app.state.layer_colors.insert(key.to_string(), new_rgb);
                         if key == "parts" {

@@ -56,7 +56,8 @@
 
 左カラムのリストからバルーンを選択すると中央のプレビューに表示されます。
 
-- **balloonc系（c0〜c4）**: 入力ボックス（communicatebox）のみ表示
+- **balloonc系（c0〜c5）**: 入力ボックス（communicatebox）のみ表示
+  - **balloonc5**（複数行入力ボックス、SSP 2.9.10以降）は、`communicatebox.x/y/width/height` の領域内で下端に OK/× ボタンを右寄せで並べ、その上の入力域の縁取りの内側右端に幅16pxのスクロールバーを置いた形で表示します。文字サイズは `font.height` を使います。スクロールバーは `communicatebox.background.color` が明るい色なら明るい配色、暗い色なら暗い配色で描画します（プレビュー上の配色は目安です）
 - **balloons・balloonk・balloonp\*def系**: サンプルテキスト・矢印・マーカー類・カウンタ等を表示
 
 右ペインの文字色・背景色の設定直下には、現在の配色（バルーン色 vs 文字色）に基づいたコントラスト比が表示されます。WCAG2とAPCAの2種類の指標を同時に確認できます。
@@ -225,8 +226,8 @@ descript.txt では、次の座標キーを 2 通りの書き方で指定でき�
 メニューバーの「ファイル > バルーンとして出力（Ctrl+E）」をクリックします。
 `output/（インストール先フォルダ名）/` に以下のファイルが出力されます。
 
-- バルーン画像（`balloonk0〜`、`balloons0〜`、`balloonp*def0〜`、`balloonc0〜4` など）
-- パーツ画像（`arrow0/1`、`clickwait`、`online0〜`、`sstp`、`marker` など）
+- バルーン画像（`balloonk0〜`、`balloons0〜`、`balloonp*def0〜`、`balloonc0〜5` など）
+- パーツ画像（`arrow0/1`、`clickwait`、`online0〜`、`sstp`、`marker`、入力ボックスのボタン `ok_*`・`cancel_*`・`mode_*` など）
 - `descript.txt` / `install.txt`
 - 説明テキスト（`readme.txt` など、後述）
 - 個別設定ファイル（差分が存在するバルーンのみ）
@@ -234,6 +235,8 @@ descript.txt では、次の座標キーを 2 通りの書き方で指定でき�
 出力が完了するとダイアログが表示されます。「フォルダを開く」を押すと出力先フォルダをエクスプローラで開きます。
 
 **説明テキストについて**: 説明テキストは `descript.txt` の `readme,ファイル名` で指定されたファイル名（指定が無ければ `readme.txt`）で、プロジェクト内の実ファイルをそのまま出力します。アプリは説明テキストの中身や文字コード（`readme.charset`）を編集しません。
+
+**入力ボックスのボタン画像について**: `ok_*`・`cancel_*`・`mode_*` は、全透明の部分が残らないよう最背面に地色を敷いて出力します。地色はバルーンの base 色です。「バルーン画像色を変更しない」設定や画像編集なしモードでは、出力する balloonc 画像の中央付近の色を使います。
 
 **注意**: 出力される `descript.txt` では `use_self_alpha`・`use_input_alpha`・`overlay_outside_balloon` が強制的に `1` で書き出されます。このアプリはPNGのアルファチャンネルを使って画像合成を行うため、これらを `0` にした場合の動作は保証されません。
 
