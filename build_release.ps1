@@ -1,4 +1,4 @@
-# build_release.ps1
+﻿# build_release.ps1
 # リリースビルドを行い、配布用 zip を作成するスクリプト
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
