@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use image::{RgbaImage, Rgba};
 use crate::core::color::Rgb;
-use crate::core::descript::{parse_descript, get_color_from_descript, pos_str, get_aliased};
+use crate::core::descript::{parse_descript, get_color_from_descript, get_coord, pos_str, get_aliased};
 use crate::core::gdi_text;
 
 #[cfg(windows)]
@@ -244,7 +244,7 @@ pub fn draw_preview(
 
     let parsed_font_ref = parsed_font.as_deref();
     if opts.is_balloonc {
-        draw_communicatebox(&mut img, &parsed, parts_cache, &opts.balloon_name, &font_name, parsed_font_ref, &mut sess);
+        draw_communicatebox(&mut img, &parsed, parts_cache, &opts.balloon_name, &font_name, font_height, opts.mode, parsed_font_ref, &mut sess);
     } else {
         draw_parts(&mut img, &parsed, parts_cache, w, h, &opts.balloon_name, &font_name, parsed_font_ref, no_aa, &mut sess);
         draw_sample_text(&mut img, &parsed, &vr, parts_cache, opts.mode, &opts.balloon_name, &font_name, parsed_font_ref, no_aa, &mut sess);
@@ -883,15 +883,17 @@ fn draw_communicatebox(
     cache: &HashMap<String, RgbaImage>,
     balloon_name: &str,
     font_name: &str,
+    font_height: f32,
+    mode: PreviewMode,
     font: Option<&fontdue::Font>,
     sess: &mut Sess,
 ) {
     let (iw, ih) = (img.width() as i32, img.height() as i32);
 
-    let cb_x: i32 = parsed.get("communicatebox.x").and_then(|s| s.parse().ok()).unwrap_or(10);
-    let cb_y: i32 = parsed.get("communicatebox.y").and_then(|s| s.parse().ok()).unwrap_or(10);
-    let cb_w: i32 = parsed.get("communicatebox.width").and_then(|s| s.parse().ok()).unwrap_or(100);
-    let cb_h: i32 = parsed.get("communicatebox.height").and_then(|s| s.parse().ok()).unwrap_or(30);
+    let cb_x: i32 = get_coord(&parsed, "communicatebox.x", 10);
+    let cb_y: i32 = get_coord(&parsed, "communicatebox.y", 10);
+    let cb_w: i32 = get_coord(&parsed, "communicatebox.width", 100);
+    let cb_h: i32 = get_coord(&parsed, "communicatebox.height", 30);
 
     let bl = cb_x.max(0).min(iw - 1);
     let bt = (if cb_y < 0 { ih + cb_y } else { cb_y }).max(0).min(ih - 1);
@@ -927,9 +929,17 @@ fn draw_communicatebox(
     let has_cancel = cache.contains_key("cancel_up.png");
     let has_mode   = cache.contains_key("mode_up.png");
 
-    // balloonc4 はバルーン名で判定
+    // balloonc4 / balloonc5 はバルーン名で判定
     let stem = balloon_name.trim_end_matches(".png");
     let is_c4 = stem.ends_with('4') && stem.contains("balloonc");
+    let is_c5 = stem.ends_with('5') && stem.contains("balloonc");
+
+    if is_c5 {
+        // balloonc5（複数行入力 textareabox）: 文字サイズは font.height に準ずる
+        let ta_leading = gdi_text::font_internal_leading(gdi_font_name, font_height, cb_no_aa);
+        draw_textarea_box(img, cache, bl, bt, br, bb, cb_bg, cb_fc, &cb_font_name, font, font_height, ta_leading, cb_no_aa, mode, sess);
+        return;
+    }
 
     // 画像ボタンを垂直中央に貼るヘルパー
     let paste_centered_y = |img: &mut RgbaImage, key: &str, bx: i32| {
@@ -1024,6 +1034,186 @@ fn draw_communicatebox(
         let text_x = bl + 4;
         let text_y = center_y(bt, cb_h);
         draw_text_on(img, &cb_font_name, font, "入力テキスト", text_x, text_y, font_h, cb_fc, None, None, cb_no_aa, sess);
+    }
+}
+
+/// balloonc5 のスクロールバー幅（px）
+const TEXTAREA_SCROLLBAR_W: i32 = 16;
+
+/// balloonc5（複数行入力 textareabox）
+///
+/// 領域（communicatebox.x/y/width/height）の下端に OK/× ボタンを右寄せで並べ、
+/// その上の残り高さの右端にスクロールバー、左側を入力域とする。
+#[allow(clippy::too_many_arguments)]
+fn draw_textarea_box(
+    img: &mut RgbaImage,
+    cache: &HashMap<String, RgbaImage>,
+    bl: i32, bt: i32, br: i32, bb: i32,
+    bg: Rgb,
+    fc: Rgb,
+    font_name: &str,
+    font: Option<&fontdue::Font>,
+    font_h: f32,
+    leading: i32,
+    no_aa: bool,
+    mode: PreviewMode,
+    sess: &mut Sess,
+) {
+    let ok_img     = cache.get("ok_up.png");
+    let cancel_img = cache.get("cancel_up.png");
+
+    // ボタン行の高さ: ボタン画像の高さの最大（画像が無ければ文字サイズ基準の正方形）
+    let fallback = (font_h as i32 + 8).max(16);
+    let btn_h = ok_img.map(|i| i.height() as i32).unwrap_or(fallback)
+        .max(cancel_img.map(|i| i.height() as i32).unwrap_or(fallback))
+        .min(bb - bt);
+    let ok_w     = ok_img.map(|i| i.width() as i32).unwrap_or(fallback);
+    let cancel_w = cancel_img.map(|i| i.width() as i32).unwrap_or(fallback);
+
+    // ボタン（下端・右寄せで [OK][×]）
+    let btn_top  = bb - btn_h;
+    let cancel_x = br - cancel_w;
+    let ok_x     = cancel_x - 1 - ok_w;  // OK と × の間は1px空ける
+    let paste_btn = |img: &mut RgbaImage, bimg: &RgbaImage, bx: i32| {
+        let by = btn_top + (btn_h - bimg.height() as i32) / 2;
+        alpha_paste(img, bimg, bx, by);
+    };
+    match ok_img {
+        Some(i) => paste_btn(img, i, ok_x),
+        None => draw_button_box(img, ok_x, btn_top, ok_x + ok_w, bb, "OK", fc, font_name, font, font_h, leading, no_aa, sess),
+    }
+    match cancel_img {
+        Some(i) => paste_btn(img, i, cancel_x),
+        None => draw_button_box(img, cancel_x, btn_top, br, bb, "×", fc, font_name, font, font_h, leading, no_aa, sess),
+    }
+
+    // 入力域 + スクロールバー（ボタン行より上。ボタン行との間に1px空ける）
+    let area_bottom = btn_top - 1;
+    if area_bottom <= bt { return; }
+    // スクロールバーは入力域を囲む縁取り（2px）の内側に置く
+    let sb_left = (br - 2 - TEXTAREA_SCROLLBAR_W).max(bl + 2);
+    fill_rect(img, bl, bt, br, area_bottom, bg, 255);
+    draw_textarea_border(img, bl, bt, br, area_bottom);
+    // 明るい背景色には明るいスクロールバー、暗い背景色には暗いスクロールバー。
+    // SSP 実機では灰色 128 で明・127 で暗。有彩色での判定式は未確認のため、
+    // ガンマ補正前の値による輝度（Rec.601 luma）で 128 以上を明とする。
+    let luma = (bg.r() as u32 * 299 + bg.g() as u32 * 587 + bg.b() as u32 * 114) / 1000;
+    let dark = luma < 128;
+    draw_scrollbar(img, sb_left, bt + 2, br - 2, area_bottom - 2, dark);
+    // 実機ではスクロールバーの左隣に1px線がある（ライトは白、ダークはトラックと同色）
+    let sep = if dark { scrollbar_colors(true).0 } else { Rgb(255, 255, 255) };
+    draw_vline(img, sb_left - 1, bt + 2, area_bottom - 3, sep, 255);
+
+    // 入力テキスト（複数行。入力域からはみ出す行は描かない）
+    // モードA: 通常サンプル
+    // モードB: 折り返し幅確認（半角・全角数字を右端で打ち切り、3行目以降は行番号で埋める）
+    // 行送り・開始位置は SSP 実機のスクリーンショットに合わせた値（行間なしで font.height ごとに送る）
+    let line_h = font_h.ceil() as i32;
+    let text_x = bl + 2;
+    let clip_x = Some(gdi_text::TextLimit::clip(sb_left - 2));
+    let mut i = 0usize;
+    loop {
+        let top = bt + 2 + line_h * i as i32;
+        if top + font_h as i32 > area_bottom - 2 { break; }
+        let line = match mode {
+            PreviewMode::A => match ["入力テキスト", "複数行の入力ができます", "3行目"].get(i) {
+                Some(l) => l.to_string(),
+                None => break,
+            },
+            PreviewMode::B => match i {
+                0 => "1234567890".repeat(100),
+                1 => "１２３４５６７８９０".repeat(100),
+                n => (n + 1).to_string(),
+            },
+        };
+        draw_text_on(img, font_name, font, &line, text_x, top - leading, font_h, fc, None, clip_x, no_aa, sess);
+        i += 1;
+    }
+}
+
+/// balloonc5 の入力域の縁取り（2px）。色は実機（Windows 11）の見た目を参考にした値
+fn draw_textarea_border(img: &mut RgbaImage, x0: i32, y0: i32, x1: i32, y1: i32) {
+    let outer_tl = Rgb(236, 236, 236);
+    let outer_r  = Rgb(221, 228, 233);
+    let inner    = Rgb(255, 255, 255);
+    let bottom   = Rgb(0, 103, 192);
+    // 外側（draw_vline は終端を含むため y1 - 1 まで）
+    draw_hline(img, x0, y0, x1, outer_tl, 255);
+    draw_vline(img, x0, y0, y1 - 1, outer_tl, 255);
+    draw_vline(img, x1 - 1, y0, y1 - 1, outer_r, 255);
+    // 内側
+    draw_hline(img, x0 + 1, y0 + 1, x1 - 1, inner, 255);
+    draw_vline(img, x0 + 1, y0 + 1, y1 - 1, inner, 255);
+    draw_vline(img, x1 - 2, y0 + 1, y1 - 1, inner, 255);
+    // 下端（2px）
+    draw_hline(img, x0, y1 - 2, x1, bottom, 255);
+    draw_hline(img, x0, y1 - 1, x1, bottom, 255);
+}
+
+/// balloonc5 のスクロールバーの配色 (トラック, 矢印)。実機の見た目を参考にした値
+fn scrollbar_colors(dark: bool) -> (Rgb, Rgb) {
+    if dark {
+        (Rgb(0x17, 0x17, 0x17), Rgb(0x50, 0x50, 0x50))
+    } else {
+        (Rgb(0xF0, 0xF0, 0xF0), Rgb(0xA4, 0xA4, 0xA4))
+    }
+}
+
+/// 縦スクロールバー（トラック + 上下矢印）。
+/// つまみはスクロールが必要なときだけ実機に出るため、プレビューでは描かない
+fn draw_scrollbar(img: &mut RgbaImage, x0: i32, y0: i32, x1: i32, y1: i32, dark: bool) {
+    let (track, arrow) = scrollbar_colors(dark);
+    let w = x1 - x0;
+    let h = y1 - y0;
+    if w <= 0 || h <= 0 { return; }
+    fill_rect(img, x0, y0, x1, y1, track, 255);
+
+    // 矢印: 底辺10px・高さ6pxの二等辺三角形を、端から6px離して横中央に置く
+    // （寸法は実機の見た目を参考にした値。形は計算で塗る）
+    const ARROW_INSET: i32 = 6;
+    const ARROW_H: f32 = 6.0;
+    const ARROW_HALF_W: f32 = 5.0;
+    if h < (ARROW_INSET + ARROW_H as i32) * 2 { return; }
+    // 座標は画素の境界基準（画素 (x, y) は [x, x+1) × [y, y+1) を覆う）
+    let cx = (x0 + w / 2) as f32;
+    let top = (y0 + ARROW_INSET) as f32;
+    fill_triangle_aa(img, [(cx, top), (cx - ARROW_HALF_W, top + ARROW_H), (cx + ARROW_HALF_W, top + ARROW_H)], arrow);
+    // 下向きは実機の見た目に合わせ、下端から 6px（終端 y1 は含まない）の位置を底辺側の起点とする
+    let bottom = (y1 - ARROW_INSET + 1) as f32;
+    fill_triangle_aa(img, [(cx, bottom), (cx - ARROW_HALF_W, bottom - ARROW_H), (cx + ARROW_HALF_W, bottom - ARROW_H)], arrow);
+}
+
+/// 三角形を塗る。各画素を 4×4 点で標本化し、内側に入った割合を不透明度にして縁をなめらかにする
+fn fill_triangle_aa(img: &mut RgbaImage, pts: [(f32, f32); 3], color: Rgb) {
+    const SS: i32 = 4;
+    // 辺 a→b に対して点 p がどちら側にあるか（外積の符号）
+    let edge = |a: (f32, f32), b: (f32, f32), p: (f32, f32)| {
+        (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0)
+    };
+    let [p0, p1, p2] = pts;
+    let min_x = pts.iter().map(|p| p.0).fold(f32::MAX, f32::min).floor() as i32;
+    let max_x = pts.iter().map(|p| p.0).fold(f32::MIN, f32::max).ceil() as i32;
+    let min_y = pts.iter().map(|p| p.1).fold(f32::MAX, f32::min).floor() as i32;
+    let max_y = pts.iter().map(|p| p.1).fold(f32::MIN, f32::max).ceil() as i32;
+    for y in min_y..max_y {
+        for x in min_x..max_x {
+            let mut hit = 0;
+            for sy in 0..SS {
+                for sx in 0..SS {
+                    let p = (x as f32 + (sx as f32 + 0.5) / SS as f32,
+                             y as f32 + (sy as f32 + 0.5) / SS as f32);
+                    let (e0, e1, e2) = (edge(p0, p1, p), edge(p1, p2, p), edge(p2, p0, p));
+                    // 頂点の並び順（時計回り／反時計回り）に依らず内側を判定する
+                    if (e0 >= 0.0 && e1 >= 0.0 && e2 >= 0.0) || (e0 <= 0.0 && e1 <= 0.0 && e2 <= 0.0) {
+                        hit += 1;
+                    }
+                }
+            }
+            if hit > 0 {
+                let a = (hit * 255 / (SS * SS)) as u8;
+                blend_px(img, x, y, color, a);
+            }
+        }
     }
 }
 
@@ -1499,10 +1689,10 @@ fn draw_overlay(
     let red   = Rgb(255, 0, 0);
 
     if is_balloonc {
-        let cb_x: i32 = parsed.get("communicatebox.x").and_then(|s| s.parse().ok()).unwrap_or(10);
-        let cb_y: i32 = parsed.get("communicatebox.y").and_then(|s| s.parse().ok()).unwrap_or(10);
-        let cb_w: i32 = parsed.get("communicatebox.width").and_then(|s| s.parse().ok()).unwrap_or(100);
-        let cb_h: i32 = parsed.get("communicatebox.height").and_then(|s| s.parse().ok()).unwrap_or(30);
+        let cb_x: i32 = get_coord(&parsed, "communicatebox.x", 10);
+        let cb_y: i32 = get_coord(&parsed, "communicatebox.y", 10);
+        let cb_w: i32 = get_coord(&parsed, "communicatebox.width", 100);
+        let cb_h: i32 = get_coord(&parsed, "communicatebox.height", 30);
         let bl = cb_x.max(0).min(iw - 1);
         let bt = (if cb_y < 0 { ih + cb_y } else { cb_y }).max(0).min(ih - 1);
         let br = (bl + cb_w).min(iw) - 1;

@@ -25,7 +25,7 @@ impl BalloonScope {
 
     fn parse(name: &str) -> Self {
         if let Some(rest) = name.strip_prefix("balloonc") {
-            return BalloonScope::BalloonC { id: rest.parse().unwrap_or(0).min(4) };
+            return BalloonScope::BalloonC { id: rest.parse().unwrap_or(0).min(5) };
         }
         if let Some(rest) = name.strip_prefix("balloons") {
             return BalloonScope::Normal { scope: 0, id: rest.parse().unwrap_or(0) };
@@ -335,7 +335,7 @@ fn draw_editor_ui(
                                         ui.label("スコープ: c系");
                                         ui.label("番号(0-4):");
                                         let mut v = *id as i32;
-                                        if ui.add(egui::DragValue::new(&mut v).range(0..=4)).changed() {
+                                        if ui.add(egui::DragValue::new(&mut v).range(0..=5)).changed() {
                                             *id = v as usize; changed = true;
                                         }
                                     }

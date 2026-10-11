@@ -41,7 +41,18 @@ pub fn show(ui: &mut Ui, app: &mut BalloonEditorApp, ctx: &Context) {
                         let selected = app.state.selected_balloon == *name;
                         let resp = ui.selectable_label(selected, label);
                         if resp.clicked() && !selected {
+                            // c系 ⇔ s/k系 をまたぐと編集対象が無くなるので位置編集を終了する
+                            let was_c = app.state.is_balloonc();
                             app.state.selected_balloon = name.clone();
+                            if app.state.is_balloonc() != was_c {
+                                app.state.drag_edit_target = None;
+                                app.state.drag_state = None;
+                                // 「編集終了」ボタンと同じく、編集開始前の overlay_mode を復元する
+                                // （直後の refresh_preview_texture_silent で反映される）
+                                if let Some(prev) = app.state.overlay_before_drag_edit.take() {
+                                    app.state.overlay_mode = prev;
+                                }
+                            }
                             app.state.png_preview_name = None;
                             app.refresh_preview_texture_silent(ctx);
                         }

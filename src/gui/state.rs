@@ -206,6 +206,9 @@ pub struct AppState {
     // --- アンドゥ/リドゥ ---
     pub undo_stack: Vec<Snapshot>,
     pub redo_stack: Vec<Snapshot>,
+    /// 色パレットで Undo 記録済みのポップアップ ID。
+    /// パレットを開いてから閉じるまでの変更を Undo 1回分にまとめるために使う
+    pub color_undo_session: Option<egui::Id>,
 
     // --- 画像サイズから動的に計算したデフォルト値（descript.txtにキーがない場合のUI表示用）---
     pub dynamic_defaults: HashMap<String, String>,
@@ -310,7 +313,7 @@ pub struct AppState {
     pub import_target_id_num: u32,
     /// 矢印の向き: 0=上, 1=下
     pub import_arrow_dir: u8,
-    /// 入力ボックス (balloonc) のID: 0〜4
+    /// 入力ボックス (balloonc) のID: 0〜5
     pub import_balloonc_id: usize,
     /// inputbtn カテゴリのボタン種別: "ok" / "cancel" / "mode"
     pub import_inputbtn_kind: String,
@@ -380,6 +383,7 @@ impl AppState {
             canvas_bg_solid_color: (255, 255, 255),
             undo_stack:        Vec::new(),
             redo_stack:        Vec::new(),
+            color_undo_session: None,
             editing_buf:       None,
             dynamic_defaults:  HashMap::new(),
             drag_edit_target:  None,
@@ -481,6 +485,44 @@ impl AppState {
         false
     }
 
+    /// 選択中バルーンの個別設定ファイル名（{バルーン名}s.txt）
+    pub fn selected_cfg_key(&self) -> String {
+        format!("{}s.txt", self.selected_balloon.trim_end_matches(".png"))
+    }
+
+    /// 選択中バルーンに実際に効く descript テキスト。
+    /// 共通設定をベースに個別設定のキーを上書きする（個別設定は差分ファイル仕様）。
+    pub fn effective_descript_text(&self) -> String {
+        match self.individual_texts.get(&self.selected_cfg_key()) {
+            Some(indiv) => {
+                let mut merged = self.descript_text.clone();
+                for (k, v) in &crate::core::descript::parse_descript(indiv) {
+                    // 別名表記の違い（number.xr と number.x 等）で両方の行が残らないようにする
+                    merged = crate::core::descript::set_descript_value_aliased(&merged, k, v);
+                }
+                merged
+            }
+            None => self.descript_text.clone(),
+        }
+    }
+
+    /// `effective_descript_text` をパースしたものと同等のマップを、テキストを組み立てずに返す。
+    /// テキスト書き換えはキーごとに正規表現を作るため重く、毎フレーム呼ぶ箇所ではこちらを使う。
+    pub fn effective_parsed(&self) -> std::collections::HashMap<String, String> {
+        use crate::core::descript::{alias_group, parse_descript};
+        let mut parsed = parse_descript(&self.descript_text);
+        if let Some(indiv) = self.individual_texts.get(&self.selected_cfg_key()) {
+            for (k, v) in parse_descript(indiv) {
+                // 別名表記の違い（number.xr と number.x 等）は個別設定側の表記だけを残す
+                if let Some(group) = alias_group(&k) {
+                    for a in group { parsed.remove(*a); }
+                }
+                parsed.insert(k, v);
+            }
+        }
+        parsed
+    }
+
     /// 選択中バルーンが balloonc 系かどうか
     pub fn is_balloonc(&self) -> bool {
         let name = self.selected_balloon.trim_end_matches(".png");
@@ -578,8 +620,27 @@ impl AppState {
         self.dirty = true;
     }
 
+    /// 色パレット操作用の Undo 記録。同じパレットを開いている間は最初の変更時だけ記録する。
+    pub fn push_undo_for_color_picker(&mut self, popup_id: egui::Id) {
+        if self.color_undo_session != Some(popup_id) {
+            self.push_undo();
+            self.color_undo_session = Some(popup_id);
+        }
+    }
+
+    /// 記録済みパレットが閉じていれば、次の変更で再び記録されるようにする（毎フレーム呼ぶ）
+    pub fn end_color_undo_session_if_closed(&mut self, ctx: &egui::Context) {
+        if let Some(id) = self.color_undo_session {
+            if !ctx.memory(|m| m.is_popup_open(id)) {
+                self.color_undo_session = None;
+            }
+        }
+    }
+
     /// アンドゥを実行する。バルーン画像の再構築が必要なら true を返す。
     pub fn undo(&mut self) -> bool {
+        // パレットを開いたまま戻した場合も、その後の変更を新たに記録する
+        self.color_undo_session = None;
         if let Some(snap) = self.undo_stack.pop() {
             let current = self.snapshot();
             let needs_rebuild = snap.layer_colors != current.layer_colors
@@ -595,6 +656,7 @@ impl AppState {
 
     /// リドゥを実行する。バルーン画像の再構築が必要なら true を返す。
     pub fn redo(&mut self) -> bool {
+        self.color_undo_session = None;
         if let Some(snap) = self.redo_stack.pop() {
             let current = self.snapshot();
             let needs_rebuild = snap.layer_colors != current.layer_colors

@@ -1,0 +1,9 @@
+// 複数行入力ボックス用の設定（\![open,textareabox]、SSP 2.9.10以降）
+
+communicatebox.x,8
+communicatebox.y,27
+// 入力可能域始点のXY座標
+
+communicatebox.width,460
+communicatebox.height,200
+// 入力ボックスの入力部分の大きさ（下端に配置されるOK/×ボタン、右端のスクロールバー含む）

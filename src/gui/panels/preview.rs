@@ -1,7 +1,7 @@
 use egui::{Context, Ui, Vec2};
 use crate::gui::app::BalloonEditorApp;
 use crate::gui::state::{CanvasBg, DragEditTarget, DragState, RectEdge, ZOOM_STEPS};
-use crate::core::descript::{parse_descript, set_descript_value, set_descript_value_aliased, pos_str, get_aliased};
+use crate::core::descript::{parse_descript, set_descript_value, set_descript_value_aliased, get_coord, pos_str, get_aliased};
 use image::RgbaImage;
 
 /// field_def の ACCORDION_GROUPS からキー→デフォルト値のマップを構築する
@@ -290,9 +290,8 @@ fn handle_drag_edit(
         None => return,
     };
 
-    // descript テキストを取得
-    let descript_text = app.state.descript_text.clone();
-    let parsed = parse_descript(&descript_text);
+    // 個別設定があれば共通設定に上書きした値を使う（毎フレーム呼ばれるため軽量なマップ版）
+    let parsed = app.state.effective_parsed();
 
     // field_def のデフォルト値を dynamic_defaults にマージ（parsed になければ dynamic_defaults、
     // それもなければ field_def デフォルト、という優先順位にする）
@@ -427,11 +426,26 @@ fn handle_drag_edit(
     // ドラッグ終了 → クランプ補正してから descript に書き込みプレビュー再生成
     if interact.drag_stopped() {
         if let Some(ds) = app.state.drag_state.take() {
+            let descript_text = app.state.effective_descript_text();
             let clamped = clamp_val(&target, ds.current_val, ds.active_edge,
                                     &descript_text, iw, ih, parts);
             let new_text = write_val_to_descript(&target, &descript_text, clamped,
                                                   ds.active_edge, ds.was_negative, iw, ih);
-            app.state.descript_text = new_text;
+            let cfg_key = app.state.selected_cfg_key();
+            if let Some(indiv) = app.state.individual_texts.get(&cfg_key) {
+                // 個別設定があればそちらへ書き込む（設定パネルの数値入力と同じ扱い）。
+                // マージ済みテキストで変化したキーだけを個別設定に反映する
+                let before = parse_descript(&descript_text);
+                let mut indiv = indiv.clone();
+                for (k, v) in &parse_descript(&new_text) {
+                    if before.get(k) != Some(v) {
+                        indiv = set_descript_value_aliased(&indiv, k, v);
+                    }
+                }
+                app.state.individual_texts.insert(cfg_key, indiv);
+            } else {
+                app.state.descript_text = new_text;
+            }
             app.refresh_preview_texture(ctx);
         }
     }
@@ -507,10 +521,10 @@ fn cb_edge_current_val(
     parsed: &std::collections::HashMap<String, String>,
     ih: i32,
 ) -> (i32, i32) {
-    let cb_x: i32 = parsed.get("communicatebox.x").and_then(|s| s.parse().ok()).unwrap_or(10);
+    let cb_x: i32 = get_coord(&parsed, "communicatebox.x", 10);
     let cb_y: i32 = pos_str(parsed.get("communicatebox.y").map(|s| s.as_str()).unwrap_or("10"), ih);
-    let cb_w: i32 = parsed.get("communicatebox.width").and_then(|s| s.parse().ok()).unwrap_or(100);
-    let cb_h: i32 = parsed.get("communicatebox.height").and_then(|s| s.parse().ok()).unwrap_or(30);
+    let cb_w: i32 = get_coord(&parsed, "communicatebox.width", 100);
+    let cb_h: i32 = get_coord(&parsed, "communicatebox.height", 30);
     match edge {
         RectEdge::Left   => (cb_x, 0),
         RectEdge::Top    => (0, cb_y),
@@ -543,10 +557,10 @@ fn detect_edge(
             ]
         }
         DragEditTarget::CommunicateBox => {
-            let cb_x = parsed.get("communicatebox.x").and_then(|s| s.parse::<i32>().ok()).unwrap_or(10) as f32;
+            let cb_x = get_coord(&parsed, "communicatebox.x", 10) as f32;
             let cb_y = pos_str(parsed.get("communicatebox.y").map(|s| s.as_str()).unwrap_or("10"), ih) as f32;
-            let cb_w = parsed.get("communicatebox.width").and_then(|s| s.parse::<i32>().ok()).unwrap_or(100) as f32;
-            let cb_h = parsed.get("communicatebox.height").and_then(|s| s.parse::<i32>().ok()).unwrap_or(30) as f32;
+            let cb_w = get_coord(&parsed, "communicatebox.width", 100) as f32;
+            let cb_h = get_coord(&parsed, "communicatebox.height", 30) as f32;
             vec![
                 (RectEdge::Left,   (mx - cb_x).abs()),
                 (RectEdge::Top,    (my - cb_y).abs()),
@@ -703,10 +717,10 @@ fn clamp_val(
         DragEditTarget::CommunicateBox => {
             const MIN_GAP: i32 = 10;
             let parsed = parse_descript(descript_text);
-            let cb_x: i32 = parsed.get("communicatebox.x").and_then(|s| s.parse().ok()).unwrap_or(10);
+            let cb_x: i32 = get_coord(&parsed, "communicatebox.x", 10);
             let cb_y = pos_str(parsed.get("communicatebox.y").map(|s| s.as_str()).unwrap_or("10"), ih);
-            let cb_w: i32 = parsed.get("communicatebox.width").and_then(|s| s.parse().ok()).unwrap_or(100);
-            let cb_h: i32 = parsed.get("communicatebox.height").and_then(|s| s.parse().ok()).unwrap_or(30);
+            let cb_w: i32 = get_coord(&parsed, "communicatebox.width", 100);
+            let cb_h: i32 = get_coord(&parsed, "communicatebox.height", 30);
             match edge {
                 Some(RectEdge::Left) => {
                     let right = cb_x + cb_w;
@@ -839,11 +853,11 @@ fn write_val_to_descript(
         }
         DragEditTarget::CommunicateBox => {
             let p = parse_descript(&text);
-            let cb_x: i32 = p.get("communicatebox.x").and_then(|s| s.parse().ok()).unwrap_or(10);
+            let cb_x: i32 = get_coord(&p, "communicatebox.x", 10);
             let cb_y_raw = p.get("communicatebox.y").cloned().unwrap_or_else(|| "10".to_string());
             let cb_y = pos_str(&cb_y_raw, ih);
-            let cb_w: i32 = p.get("communicatebox.width").and_then(|s| s.parse().ok()).unwrap_or(100);
-            let cb_h: i32 = p.get("communicatebox.height").and_then(|s| s.parse().ok()).unwrap_or(30);
+            let cb_w: i32 = get_coord(&p, "communicatebox.width", 100);
+            let cb_h: i32 = get_coord(&p, "communicatebox.height", 30);
             match edge {
                 Some(RectEdge::Left) => {
                     let new_w = (cb_x + cb_w - val.0).max(1);
